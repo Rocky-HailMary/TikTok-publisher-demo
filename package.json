@@ -1,0 +1,19 @@
+{
+  "name": "tiktok-review-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal TikTok OAuth + Content Posting API demo for app review",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1"
+  }
+}
