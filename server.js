@@ -19,8 +19,27 @@ const {
   TIKTOK_AUTH_BASE = 'https://www.tiktok.com',
   TIKTOK_API_BASE = 'https://open.tiktokapis.com',
   DEMO_VIDEO_URL = '',
-  SESSION_SECRET = 'change-this-in-production'
+  SESSION_SECRET = 'change-this-in-production',
+  ALLOWED_ORIGINS = 'https://www.hypercreative.games,https://hypercreative.games',
+  SESSION_COOKIE_DOMAIN = ''
 } = process.env;
+
+const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  return next();
+});
 
 app.use(
   session({
@@ -31,7 +50,8 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: APP_BASE_URL.startsWith('https://')
+      secure: APP_BASE_URL.startsWith('https://'),
+      domain: SESSION_COOKIE_DOMAIN || undefined
     }
   })
 );

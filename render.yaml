@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: danceguru-tiktok-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: APP_BASE_URL
+        sync: false
+      - key: TIKTOK_CLIENT_KEY
+        sync: false
+      - key: TIKTOK_CLIENT_SECRET
+        sync: false
+      - key: TIKTOK_REDIRECT_URI
+        sync: false
+      - key: TIKTOK_SCOPES
+        value: user.info.basic,video.publish
+      - key: ALLOWED_ORIGINS
+        value: https://www.hypercreative.games,https://hypercreative.games
+      - key: SESSION_COOKIE_DOMAIN
+        value: .hypercreative.games
+      - key: SESSION_SECRET
+        generateValue: true

@@ -30,6 +30,8 @@ Required env vars:
 
 Recommended:
 - `TIKTOK_SCOPES=user.info.basic,video.publish`
+- `ALLOWED_ORIGINS=https://www.hypercreative.games,https://hypercreative.games`
+- `SESSION_COOKIE_DOMAIN=.hypercreative.games`
 
 ## 3) Domain + callback
 
@@ -40,6 +42,11 @@ Set TikTok redirect URI to:
 - `https://api.hypercreative.games/auth/tiktok/callback`
 
 Ensure this exact URL also appears in Render env (`TIKTOK_REDIRECT_URI`).
+
+If Wix manages DNS, add:
+- CNAME `api` -> `<your-render-service>.onrender.com`
+
+Wait for SSL to become active on Render custom domain before running OAuth.
 
 ## 4) Demo recording checklist
 
