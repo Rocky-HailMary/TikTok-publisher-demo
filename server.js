@@ -25,6 +25,7 @@ const {
   SESSION_SECRET = 'change-this-in-production',
   ALLOWED_ORIGINS = 'https://www.hypercreative.games,https://hypercreative.games',
   SESSION_COOKIE_DOMAIN = '',
+  SESSION_SAMESITE = 'none',
   MAX_UPLOAD_MB = '200',
   LOCAL_UPLOAD_TTL_MIN = '120'
 } = process.env;
@@ -100,6 +101,11 @@ app.use((req, res, next) => {
   return next();
 });
 
+const appIsHttps = APP_BASE_URL.startsWith('https://');
+const sameSiteRaw = String(SESSION_SAMESITE || 'none').toLowerCase();
+const sameSiteNormalized = ['none', 'lax', 'strict'].includes(sameSiteRaw) ? sameSiteRaw : 'none';
+const sameSiteEffective = (!appIsHttps && sameSiteNormalized === 'none') ? 'lax' : sameSiteNormalized;
+
 app.use(
   session({
     name: 'dg_tiktok_demo',
@@ -108,8 +114,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: APP_BASE_URL.startsWith('https://'),
+      sameSite: sameSiteEffective,
+      secure: appIsHttps,
       domain: SESSION_COOKIE_DOMAIN || undefined
     }
   })
@@ -372,12 +378,19 @@ app.get('/auth/tiktok/start', (req, res) => {
   const missing = mustHaveConfig();
   if (missing.length) {
     req.session.flash = { type: 'error', message: `Missing env vars: ${missing.join(', ')}` };
-    return res.redirect('/');
+    return req.session.save(() => res.redirect('/'));
   }
 
   const state = crypto.randomBytes(24).toString('hex');
   req.session.oauthState = state;
-  return res.redirect(authUrl(state));
+  req.session.oauthStateCreatedAt = Date.now();
+  return req.session.save((err) => {
+    if (err) {
+      req.session.flash = { type: 'error', message: `Session error before OAuth: ${String(err.message || err)}` };
+      return req.session.save(() => res.redirect('/'));
+    }
+    return res.redirect(authUrl(state));
+  });
 });
 
 app.get('/auth/tiktok/callback', async (req, res) => {
@@ -394,8 +407,11 @@ app.get('/auth/tiktok/callback', async (req, res) => {
   }
 
   if (!state || state !== req.session.oauthState) {
-    req.session.flash = { type: 'error', message: 'State mismatch. Please retry OAuth.' };
-    return res.redirect('/');
+    req.session.flash = {
+      type: 'error',
+      message: `State mismatch. Please retry OAuth. expected=${req.session.oauthState || 'none'} got=${state || 'none'}`
+    };
+    return req.session.save(() => res.redirect('/'));
   }
 
   try {
@@ -422,7 +438,12 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     };
 
     req.session.flash = { type: 'ok', message: 'TikTok connected successfully.' };
-    return res.redirect('/');
+    return req.session.save((saveErr) => {
+      if (saveErr) {
+        req.session.flash = { type: 'error', message: `Session save failed: ${String(saveErr.message || saveErr)}` };
+      }
+      return res.redirect('/');
+    });
   } catch (e) {
     req.session.flash = { type: 'error', message: `Callback error: ${String(e.message || e)}` };
     return res.redirect('/');
@@ -444,7 +465,9 @@ app.get('/api/status', (req, res) => {
     open_id: t?.open_id || null,
     expires_at: t?.expires_at || null,
     has_access_token: Boolean(t?.access_token),
-    redirect_uri: TIKTOK_REDIRECT_URI
+    redirect_uri: TIKTOK_REDIRECT_URI,
+    session_id: req.sessionID || null,
+    has_oauth_state: Boolean(req.session?.oauthState)
   });
 });
 

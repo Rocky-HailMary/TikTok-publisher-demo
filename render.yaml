@@ -21,6 +21,8 @@ services:
         value: https://www.hypercreative.games,https://hypercreative.games
       - key: SESSION_COOKIE_DOMAIN
         value: .hypercreative.games
+      - key: SESSION_SAMESITE
+        value: none
       - key: MAX_UPLOAD_MB
         value: "200"
       - key: LOCAL_UPLOAD_TTL_MIN

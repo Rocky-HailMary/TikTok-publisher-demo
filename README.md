@@ -33,6 +33,7 @@ Recommended:
 - `TIKTOK_SCOPES=user.info.basic,video.publish`
 - `ALLOWED_ORIGINS=https://www.hypercreative.games,https://hypercreative.games`
 - `SESSION_COOKIE_DOMAIN=.hypercreative.games`
+- `SESSION_SAMESITE=none`
 - `MAX_UPLOAD_MB=200`
 - `LOCAL_UPLOAD_TTL_MIN=120`
 
