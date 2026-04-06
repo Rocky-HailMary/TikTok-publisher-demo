@@ -2,6 +2,9 @@ const express = require('express');
 const session = require('express-session');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
+const fsp = require('fs/promises');
+const multer = require('multer');
 require('dotenv').config();
 
 const app = express();
@@ -21,10 +24,66 @@ const {
   DEMO_VIDEO_URL = '',
   SESSION_SECRET = 'change-this-in-production',
   ALLOWED_ORIGINS = 'https://www.hypercreative.games,https://hypercreative.games',
-  SESSION_COOKIE_DOMAIN = ''
+  SESSION_COOKIE_DOMAIN = '',
+  MAX_UPLOAD_MB = '200',
+  LOCAL_UPLOAD_TTL_MIN = '120'
 } = process.env;
 
 const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+const uploadDir = path.join('/tmp', 'dg-tiktok-upload-cache');
+const maxUploadBytes = Math.max(1, Number(MAX_UPLOAD_MB || 200)) * 1024 * 1024;
+const uploadTtlMs = Math.max(5, Number(LOCAL_UPLOAD_TTL_MIN || 120)) * 60 * 1000;
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const uploadStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.mp4';
+    cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: maxUploadBytes },
+  fileFilter: (_req, file, cb) => {
+    const okMime = ['video/mp4', 'video/quicktime', 'application/octet-stream'];
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const okExt = ['.mp4', '.mov'].includes(ext);
+    if (okExt || okMime.includes(file.mimetype)) return cb(null, true);
+    return cb(new Error('Unsupported file type. Use .mp4 or .mov'));
+  }
+});
+
+function publicUploadUrl(fileName) {
+  return new URL(`/uploads/${encodeURIComponent(fileName)}`, APP_BASE_URL).toString();
+}
+
+async function cleanupUploadCache() {
+  try {
+    const files = await fsp.readdir(uploadDir);
+    const now = Date.now();
+    await Promise.all(files.map(async (name) => {
+      const full = path.join(uploadDir, name);
+      try {
+        const stat = await fsp.stat(full);
+        if (!stat.isFile()) return;
+        if (now - stat.mtimeMs > uploadTtlMs) {
+          await fsp.unlink(full);
+        }
+      } catch {
+        // ignore per-file cleanup failures
+      }
+    }));
+  } catch {
+    // ignore cleanup failures
+  }
+}
+
+setInterval(cleanupUploadCache, 15 * 60 * 1000).unref();
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -221,12 +280,29 @@ function renderHome(req, res) {
   </div>
 
   <div class="card">
+    <h3>3) Upload from this device (no cloud storage required)</h3>
+    <p class="muted">File is uploaded to this backend, exposed temporarily as a short-lived URL, then TikTok pulls it.</p>
+    <p class="muted">Max upload size: ${Math.round(maxUploadBytes / (1024 * 1024))} MB</p>
+    <form id="uploadForm" enctype="multipart/form-data">
+      <label>Video file (.mp4/.mov):</label>
+      <input id="video_file" name="video" type="file" accept="video/mp4,video/quicktime,.mp4,.mov" required />
+
+      <label>Caption:</label>
+      <textarea id="upload_caption" name="caption" rows="3" placeholder="Test post from Dance Guru demo">Dance Guru TikTok API demo post</textarea>
+
+      <button type="submit">Upload & Publish</button>
+    </form>
+    <pre id="uploadResult">No upload attempt yet.</pre>
+  </div>
+
+  <div class="card">
     <h3>Review checklist</h3>
     <ul>
       <li>Show this domain + URL in browser address bar.</li>
       <li>Click Connect TikTok and show consent screen.</li>
       <li>Return to app showing connected state.</li>
       <li>Publish test and show API response payload.</li>
+      <li>Optional: show local file upload + publish for no-cloud workflow.</li>
     </ul>
   </div>
 
@@ -250,6 +326,33 @@ function renderHome(req, res) {
         result.textContent = JSON.stringify(d, null, 2);
       } catch (err) {
         result.textContent = String(err);
+      }
+    });
+
+    const uploadForm = document.getElementById('uploadForm');
+    const uploadResult = document.getElementById('uploadResult');
+    uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('video_file');
+      const captionInput = document.getElementById('upload_caption');
+      if (!fileInput.files || !fileInput.files.length) {
+        uploadResult.textContent = 'Please choose a video file first.';
+        return;
+      }
+      uploadResult.textContent = 'Uploading and publishing...';
+      const fd = new FormData();
+      fd.append('video', fileInput.files[0]);
+      fd.append('caption', captionInput.value || 'Dance Guru TikTok API demo post');
+
+      try {
+        const r = await fetch('/publish/upload', {
+          method: 'POST',
+          body: fd
+        });
+        const d = await r.json();
+        uploadResult.textContent = JSON.stringify(d, null, 2);
+      } catch (err) {
+        uploadResult.textContent = String(err);
       }
     });
   </script>
@@ -345,6 +448,69 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/uploads/:file', async (req, res) => {
+  const name = path.basename(req.params.file || '');
+  if (!name) return res.status(404).send('Not found');
+  const full = path.join(uploadDir, name);
+  if (!full.startsWith(uploadDir)) return res.status(400).send('Invalid file');
+  try {
+    await fsp.access(full, fs.constants.R_OK);
+    return res.sendFile(full, {
+      headers: {
+        'Cache-Control': 'public, max-age=300'
+      }
+    });
+  } catch {
+    return res.status(404).send('Not found');
+  }
+});
+
+app.post('/publish/upload', upload.single('video'), async (req, res) => {
+  const t = req.session.tiktok || null;
+  if (!t?.access_token) {
+    if (req.file?.path) {
+      try { await fsp.unlink(req.file.path); } catch {}
+    }
+    return res.status(401).json({ ok: false, error: 'Not connected. Run OAuth first.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: 'Missing uploaded file. Use form field name "video".' });
+  }
+
+  const caption = String(req.body?.caption || 'Dance Guru API demo post').trim();
+  const videoUrl = publicUploadUrl(req.file.filename);
+
+  try {
+    const out = await publishVideoInit({
+      accessToken: t.access_token,
+      openId: t.open_id,
+      caption,
+      videoUrl
+    });
+
+    return res.status(out.ok ? 200 : 400).json({
+      ok: out.ok,
+      endpoint: '/v2/post/publish/video/init/',
+      request: {
+        caption,
+        source: 'PULL_FROM_URL',
+        temp_video_url: videoUrl,
+        privacy_level: 'SELF_ONLY'
+      },
+      local_upload: {
+        filename: req.file.filename,
+        size_bytes: req.file.size,
+        ttl_minutes: Math.round(uploadTtlMs / 60000)
+      },
+      response_status: out.status,
+      response_payload: out.payload
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 app.post('/publish/test', async (req, res) => {
   const t = req.session.tiktok || null;
   if (!t?.access_token) {
@@ -380,6 +546,16 @@ app.post('/publish/test', async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
+
+app.use((err, _req, res, next) => {
+  if (!err) return next();
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ ok: false, error: `File too large. Max ${Math.round(maxUploadBytes / (1024 * 1024))} MB.` });
+  }
+  return res.status(400).json({ ok: false, error: String(err.message || err) });
+});
+
+cleanupUploadCache().catch(() => {});
 
 app.listen(PORT, () => {
   console.log(`TikTok review demo running on :${PORT}`);

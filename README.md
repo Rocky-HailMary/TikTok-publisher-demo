@@ -4,6 +4,7 @@ Minimal web demo to satisfy TikTok app review requirements:
 - OAuth connect flow
 - Callback + token exchange
 - Content Posting API test call
+- Local file upload from your device (no cloud storage required)
 - Clear UI for recording end-to-end demo video
 
 ## 1) Local run
@@ -32,6 +33,8 @@ Recommended:
 - `TIKTOK_SCOPES=user.info.basic,video.publish`
 - `ALLOWED_ORIGINS=https://www.hypercreative.games,https://hypercreative.games`
 - `SESSION_COOKIE_DOMAIN=.hypercreative.games`
+- `MAX_UPLOAD_MB=200`
+- `LOCAL_UPLOAD_TTL_MIN=120`
 
 ## 3) Domain + callback
 
@@ -57,7 +60,14 @@ Wait for SSL to become active on Render custom domain before running OAuth.
 5. Enter public video URL + caption.
 6. Click **Publish Test** and show JSON response.
 
-## 5) Notes
+## 5) No-cloud-storage upload path
+
+- Open `https://api.hypercreative.games/`
+- Use the **Upload from this device** section.
+- The server stores the file temporarily in `/tmp`, generates a short-lived URL on your own domain (`/uploads/...`), then calls TikTok `publish/video/init` using that URL.
+- This avoids third-party cloud object storage while still using TikTok's pull-by-URL mechanism.
+
+## 6) Notes
 
 - This is review/demo-focused, not production hardening.
 - For production, add persistent token storage, refresh flow, CSRF hardening, audit logs, and stronger auth.
