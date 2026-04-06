@@ -1,0 +1,17 @@
+{
+  "name": "mac-mini-clip-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight bridge to expose Mac mini export clips for TikTok pull-by-url",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2"
+  }
+}

@@ -5,9 +5,10 @@ Minimal web demo to satisfy TikTok app review requirements:
 - Callback + token exchange
 - Content Posting API test call
 - Local file upload from your device (no cloud storage required)
+- **Option 1:** Browse/publish clips directly from Mac mini `SyncFiles/export_clips` via a lightweight bridge service
 - Clear UI for recording end-to-end demo video
 
-## 1) Local run
+## 1) Local run (demo backend)
 
 ```bash
 cd tiktok-review-demo
@@ -37,6 +38,11 @@ Recommended:
 - `MAX_UPLOAD_MB=200`
 - `LOCAL_UPLOAD_TTL_MIN=120`
 
+For Option 1 (Mac mini bridge integration):
+- `MAC_BRIDGE_BASE_URL=https://clips.hypercreative.games` (or your public tunnel URL)
+- `MAC_BRIDGE_TOKEN=<same token as bridge BRIDGE_TOKEN>`
+- `MAC_BRIDGE_FILE_TOKEN=<optional, only if enabled on bridge>`
+
 ## 3) Domain + callback
 
 Target demo domain:
@@ -52,23 +58,82 @@ If Wix manages DNS, add:
 
 Wait for SSL to become active on Render custom domain before running OAuth.
 
-## 4) Demo recording checklist
+## 4) Option 1 setup: Mac mini clip bridge (new)
+
+A lightweight local service is included at:
+- `mac-mini-clip-bridge/`
+
+It exposes files in `SyncFiles/export_clips` as pullable URLs for TikTok.
+
+### 4.1 Run bridge on Mac mini
+
+```bash
+cd tiktok-review-demo/mac-mini-clip-bridge
+cp .env.example .env
+npm install
+npm start
+```
+
+Bridge env vars:
+- `BRIDGE_TOKEN` (required for `GET /clips` metadata list)
+- `EXPORT_CLIPS_DIR` (e.g. `/Users/rocky/.openclaw/workspaces/marketing/SyncFiles/export_clips`)
+- `BRIDGE_BASE_URL` (public URL TikTok can fetch from)
+- `PORT` (default `8787`)
+- `BRIDGE_FILE_TOKEN` (optional: if set, file endpoint requires `?token=...`)
+
+Endpoints:
+- `GET /health`
+- `GET /clips` (requires `Authorization: Bearer <BRIDGE_TOKEN>`)
+- `GET /clips/:name` (streams `.mp4` / `.mov`; optional query token)
+
+### 4.2 Expose bridge publicly
+
+TikTok must be able to fetch video URLs from the internet.
+
+Options:
+- Reverse proxy/domain to Mac mini (recommended): e.g. `https://clips.hypercreative.games`
+- Temporary tunnel URL for testing (Cloudflare Tunnel / ngrok / Tailscale funnel)
+
+Set this public address as:
+- bridge `BRIDGE_BASE_URL`
+- Render `MAC_BRIDGE_BASE_URL`
+
+### 4.3 Wire bridge into Render backend
+
+Set on Render (`api.hypercreative.games` service):
+- `MAC_BRIDGE_BASE_URL`
+- `MAC_BRIDGE_TOKEN`
+- optional `MAC_BRIDGE_FILE_TOKEN`
+
+Then in app UI:
+1. Click **Load clips from Mac mini**
+2. Select a clip
+3. Enter caption
+4. Click **Publish Selected Mac Clip**
+
+## 5) Demo recording checklist
 
 1. Show browser URL with your real domain.
 2. Click **Connect TikTok**.
 3. Show TikTok consent + redirect back.
 4. Show connected state in UI.
-5. Enter public video URL + caption.
-6. Click **Publish Test** and show JSON response.
+5. Publish test and show JSON response.
+6. Optional: show local file upload + publish for no-cloud workflow.
+7. Optional: show Mac mini clip browse + publish flow.
 
-## 5) No-cloud-storage upload path
+## 6) No-cloud-storage upload paths
 
-- Open `https://api.hypercreative.games/`
-- Use the **Upload from this device** section.
-- The server stores the file temporarily in `/tmp`, generates a short-lived URL on your own domain (`/uploads/...`), then calls TikTok `publish/video/init` using that URL.
-- This avoids third-party cloud object storage while still using TikTok's pull-by-URL mechanism.
+### Path A: direct upload in demo UI
+- Use **Upload from this device** section.
+- Backend stores file temporarily in `/tmp`, exposes `/uploads/...`, TikTok pulls by URL.
 
-## 6) Notes
+### Path B (Option 1): Mac mini bridge
+- Keep your clips in `SyncFiles/export_clips` on Mac mini.
+- Bridge exposes those clips directly.
+- Render app lists and publishes selected clip by URL.
+- Avoids setting up separate object storage.
+
+## 7) Notes
 
 - This is review/demo-focused, not production hardening.
-- For production, add persistent token storage, refresh flow, CSRF hardening, audit logs, and stronger auth.
+- For production, add persistent token storage, refresh flow, CSRF hardening, audit logs, stronger auth, and stricter bridge access controls.

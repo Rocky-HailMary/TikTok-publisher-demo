@@ -27,5 +27,11 @@ services:
         value: "200"
       - key: LOCAL_UPLOAD_TTL_MIN
         value: "120"
+      - key: MAC_BRIDGE_BASE_URL
+        sync: false
+      - key: MAC_BRIDGE_TOKEN
+        sync: false
+      - key: MAC_BRIDGE_FILE_TOKEN
+        sync: false
       - key: SESSION_SECRET
         generateValue: true

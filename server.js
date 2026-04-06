@@ -27,7 +27,10 @@ const {
   SESSION_COOKIE_DOMAIN = '',
   SESSION_SAMESITE = 'none',
   MAX_UPLOAD_MB = '200',
-  LOCAL_UPLOAD_TTL_MIN = '120'
+  LOCAL_UPLOAD_TTL_MIN = '120',
+  MAC_BRIDGE_BASE_URL = '',
+  MAC_BRIDGE_TOKEN = '',
+  MAC_BRIDGE_FILE_TOKEN = ''
 } = process.env;
 
 const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
@@ -61,6 +64,22 @@ const upload = multer({
 
 function publicUploadUrl(fileName) {
   return new URL(`/uploads/${encodeURIComponent(fileName)}`, APP_BASE_URL).toString();
+}
+
+function getMacClipPublicUrl(name) {
+  const base = MAC_BRIDGE_BASE_URL.trim();
+  if (!base) throw new Error('MAC_BRIDGE_BASE_URL is not configured');
+  const url = new URL(`/clips/${encodeURIComponent(name)}`, base);
+  if (MAC_BRIDGE_FILE_TOKEN) {
+    url.searchParams.set('token', MAC_BRIDGE_FILE_TOKEN);
+  }
+  return url.toString();
+}
+
+function isAllowedClipName(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (name.includes('/') || name.includes('\\')) return false;
+  return ['.mp4', '.mov'].includes(path.extname(name).toLowerCase());
 }
 
 async function cleanupUploadCache() {
@@ -198,7 +217,7 @@ async function publishVideoInit({ accessToken, openId, caption, videoUrl }) {
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json'
   };
-  if (openId) headers['open_id'] = openId;
+  if (openId) headers.open_id = openId;
 
   const resp = await fetch(publishUrl, {
     method: 'POST',
@@ -219,6 +238,26 @@ async function publishVideoInit({ accessToken, openId, caption, videoUrl }) {
     status: resp.status,
     payload
   };
+}
+
+async function fetchMacBridgeClips() {
+  if (!MAC_BRIDGE_BASE_URL) {
+    return { ok: false, status: 500, payload: { ok: false, error: 'MAC_BRIDGE_BASE_URL is not configured' } };
+  }
+
+  const url = new URL('/clips', MAC_BRIDGE_BASE_URL).toString();
+  const headers = {};
+  if (MAC_BRIDGE_TOKEN) headers.Authorization = `Bearer ${MAC_BRIDGE_TOKEN}`;
+
+  const resp = await fetch(url, { headers });
+  const text = await resp.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { raw: text };
+  }
+  return { ok: resp.ok, status: resp.status, payload };
 }
 
 function renderHome(req, res) {
@@ -243,9 +282,11 @@ function renderHome(req, res) {
     .ok { color: #0f7a2c; }
     .bad { color: #a12121; }
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #aaa; cursor: pointer; }
-    input, textarea { width: 100%; padding: 9px; margin: 6px 0 10px; border: 1px solid #bbb; border-radius: 8px; }
+    input, textarea, select { width: 100%; padding: 9px; margin: 6px 0 10px; border: 1px solid #bbb; border-radius: 8px; }
     pre { background:#111; color:#f7f7f7; padding: 12px; border-radius: 10px; overflow:auto; max-height: 260px; }
     .muted { color: #666; font-size: 13px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row > button { width: auto; }
   </style>
 </head>
 <body>
@@ -302,6 +343,25 @@ function renderHome(req, res) {
   </div>
 
   <div class="card">
+    <h3>4) Browse Mac mini export clips</h3>
+    <p class="muted">Loads clips from configured bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
+    <div class="row">
+      <button id="loadMacClipsBtn" type="button">Load clips from Mac mini</button>
+    </div>
+
+    <label>Available clips:</label>
+    <select id="mac_clip_select">
+      <option value="">Load clips first...</option>
+    </select>
+
+    <label>Caption:</label>
+    <textarea id="mac_caption" rows="3">Dance Guru TikTok API demo post</textarea>
+
+    <button id="publishMacClipBtn" type="button">Publish Selected Mac Clip</button>
+    <pre id="macResult">No Mac mini publish attempt yet.</pre>
+  </div>
+
+  <div class="card">
     <h3>Review checklist</h3>
     <ul>
       <li>Show this domain + URL in browser address bar.</li>
@@ -309,6 +369,7 @@ function renderHome(req, res) {
       <li>Return to app showing connected state.</li>
       <li>Publish test and show API response payload.</li>
       <li>Optional: show local file upload + publish for no-cloud workflow.</li>
+      <li>Optional: browse Mac mini export clips and publish one clip.</li>
     </ul>
   </div>
 
@@ -359,6 +420,67 @@ function renderHome(req, res) {
         uploadResult.textContent = JSON.stringify(d, null, 2);
       } catch (err) {
         uploadResult.textContent = String(err);
+      }
+    });
+
+    const loadMacClipsBtn = document.getElementById('loadMacClipsBtn');
+    const publishMacClipBtn = document.getElementById('publishMacClipBtn');
+    const macResult = document.getElementById('macResult');
+    const macSelect = document.getElementById('mac_clip_select');
+
+    loadMacClipsBtn.addEventListener('click', async () => {
+      macResult.textContent = 'Loading clips...';
+      try {
+        const r = await fetch('/mac/clips');
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+          macResult.textContent = JSON.stringify(d, null, 2);
+          return;
+        }
+
+        macSelect.innerHTML = '';
+        const clips = Array.isArray(d.clips) ? d.clips : [];
+        if (!clips.length) {
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = 'No clips found';
+          macSelect.appendChild(opt);
+        } else {
+          clips.forEach((clip) => {
+            const opt = document.createElement('option');
+            opt.value = clip.name;
+            const mb = (Number(clip.size || 0) / (1024 * 1024)).toFixed(2);
+            opt.textContent = clip.name + ' (' + mb + ' MB)';
+            macSelect.appendChild(opt);
+          });
+        }
+        macResult.textContent = JSON.stringify(d, null, 2);
+      } catch (err) {
+        macResult.textContent = String(err);
+      }
+    });
+
+    publishMacClipBtn.addEventListener('click', async () => {
+      const name = macSelect.value;
+      if (!name) {
+        macResult.textContent = 'Choose a clip first.';
+        return;
+      }
+      macResult.textContent = 'Publishing selected Mac clip...';
+
+      try {
+        const r = await fetch('/publish/mac-clip', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            name,
+            caption: document.getElementById('mac_caption').value
+          })
+        });
+        const d = await r.json();
+        macResult.textContent = JSON.stringify(d, null, 2);
+      } catch (err) {
+        macResult.textContent = String(err);
       }
     });
   </script>
@@ -471,6 +593,30 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/mac/clips', async (_req, res) => {
+  try {
+    const bridgeResp = await fetchMacBridgeClips();
+    if (!bridgeResp.ok) {
+      return res.status(bridgeResp.status || 502).json({
+        ok: false,
+        error: 'Failed to fetch clips from Mac bridge',
+        bridge_status: bridgeResp.status,
+        bridge_payload: bridgeResp.payload
+      });
+    }
+
+    const clips = Array.isArray(bridgeResp.payload?.clips) ? bridgeResp.payload.clips : [];
+    return res.json({
+      ok: true,
+      clip_count: clips.length,
+      clips,
+      bridge: MAC_BRIDGE_BASE_URL
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 app.get('/uploads/:file', async (req, res) => {
   const name = path.basename(req.params.file || '');
   if (!name) return res.status(404).send('Not found');
@@ -525,6 +671,51 @@ app.post('/publish/upload', upload.single('video'), async (req, res) => {
         filename: req.file.filename,
         size_bytes: req.file.size,
         ttl_minutes: Math.round(uploadTtlMs / 60000)
+      },
+      response_status: out.status,
+      response_payload: out.payload
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/publish/mac-clip', async (req, res) => {
+  const t = req.session.tiktok || null;
+  if (!t?.access_token) {
+    return res.status(401).json({ ok: false, error: 'Not connected. Run OAuth first.' });
+  }
+
+  const name = String(req.body?.name || '').trim();
+  const caption = String(req.body?.caption || 'Dance Guru API demo post').trim();
+  if (!isAllowedClipName(name)) {
+    return res.status(400).json({ ok: false, error: 'Invalid clip name. Use an existing .mp4 or .mov filename.' });
+  }
+
+  let videoUrl;
+  try {
+    videoUrl = getMacClipPublicUrl(name);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+
+  try {
+    const out = await publishVideoInit({
+      accessToken: t.access_token,
+      openId: t.open_id,
+      caption,
+      videoUrl
+    });
+
+    return res.status(out.ok ? 200 : 400).json({
+      ok: out.ok,
+      endpoint: '/v2/post/publish/video/init/',
+      request: {
+        caption,
+        source: 'PULL_FROM_URL',
+        selected_clip: name,
+        video_url: videoUrl,
+        privacy_level: 'SELF_ONLY'
       },
       response_status: out.status,
       response_payload: out.payload
