@@ -613,11 +613,20 @@ app.get('/auth/tiktok/callback', async (req, res) => {
       return res.redirect('/');
     }
 
-    const data = tokenResp.payload?.data || tokenResp.payload || {};
+    const data = tokenResp.payload?.data || {};
+    const accessToken = String(data.access_token || '').trim();
+    if (!accessToken) {
+      req.session.flash = {
+        type: 'error',
+        message: `Token exchange returned no access_token: ${JSON.stringify(tokenResp.payload)}`
+      };
+      return res.redirect('/');
+    }
+
     const expiresIn = Number(data.expires_in || 0);
     const now = Date.now();
     req.session.tiktok = {
-      access_token: data.access_token,
+      access_token: accessToken,
       refresh_token: data.refresh_token,
       open_id: data.open_id,
       scope: data.scope,
