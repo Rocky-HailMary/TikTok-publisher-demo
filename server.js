@@ -632,9 +632,7 @@ function renderHome(req, res) {
       const text = String(clip?.posting?.text || '').trim();
       const hashtags = Array.isArray(clip?.posting?.hashtags) ? clip.posting.hashtags : [];
       const tagText = hashtags.join(' ').trim();
-      return [text, tagText].filter(Boolean).join('
-
-').trim();
+      return [text, tagText].filter(Boolean).join('\\n\\n').trim();
     }
 
     function getCheckedMacClips() {
