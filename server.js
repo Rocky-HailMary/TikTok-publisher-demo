@@ -288,7 +288,8 @@ function renderHome(req, res) {
     .row > button { width: auto; }
     .clip-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(110px, 110px));
+      justify-content: start;
       gap: 12px;
       margin: 10px 0 12px;
     }
@@ -385,6 +386,7 @@ function renderHome(req, res) {
     </div>
 
     <div id="mac_clip_grid" class="clip-grid"></div>
+    <p class="muted">Click a thumbnail to play/pause preview.</p>
     <p class="muted">Selected clip: <strong id="selected_mac_clip">None</strong></p>
 
     <label>Caption:</label>
@@ -447,6 +449,28 @@ function renderHome(req, res) {
       return mb.toFixed(2) + ' MB';
     }
 
+    function stopAllClipPreviews(exceptName = '') {
+      const videos = macClipGrid.querySelectorAll('.clip-card video');
+      videos.forEach((video) => {
+        const card = video.closest('.clip-card');
+        if (!card || card.dataset.name === exceptName) return;
+        video.pause();
+        video.currentTime = 0;
+      });
+    }
+
+    function toggleClipPreview(card) {
+      const video = card.querySelector('video');
+      if (!video) return;
+      const clipName = card.dataset.name || '';
+      if (video.paused) {
+        stopAllClipPreviews(clipName);
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    }
+
     function setSelectedMacClip(name) {
       selectedMacClip = name || '';
       selectedMacClipLabel.textContent = selectedMacClip || 'None';
@@ -479,6 +503,7 @@ function renderHome(req, res) {
         const video = document.createElement('video');
         video.preload = 'metadata';
         video.muted = true;
+        video.loop = true;
         video.playsInline = true;
         video.src = clip.preview_url || clip.url || '';
         thumb.appendChild(video);
@@ -501,7 +526,10 @@ function renderHome(req, res) {
         card.appendChild(thumb);
         card.appendChild(meta);
 
-        card.addEventListener('click', () => setSelectedMacClip(clip.name));
+        card.addEventListener('click', () => {
+          setSelectedMacClip(clip.name);
+          toggleClipPreview(card);
+        });
         macClipGrid.appendChild(card);
       });
 
