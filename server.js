@@ -40,6 +40,7 @@ const uploadTtlMs = Math.max(5, Number(LOCAL_UPLOAD_TTL_MIN || 120)) * 60 * 1000
 const oauthStateStore = new Map();
 const oauthStateTtlMs = 10 * 60 * 1000;
 let globalTikTokAuth = null;
+let lastOAuthDebug = null;
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -728,6 +729,13 @@ app.get('/auth/tiktok/start', (req, res) => {
 
   const state = crypto.randomBytes(24).toString('hex');
   oauthStateStore.set(state, Date.now());
+  lastOAuthDebug = {
+    stage: 'start',
+    time: new Date().toISOString(),
+    state_prefix: state.slice(0, 10),
+    app_base_url: APP_BASE_URL,
+    redirect_uri: TIKTOK_REDIRECT_URI
+  };
 
   // Keep session state too (best effort) for browsers that preserve cookies.
   req.session.oauthState = state;
@@ -744,6 +752,17 @@ app.get('/auth/tiktok/start', (req, res) => {
 
 app.get('/auth/tiktok/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
+
+  lastOAuthDebug = {
+    stage: 'callback_received',
+    time: new Date().toISOString(),
+    has_code: Boolean(code),
+    code_len: code ? String(code).length : 0,
+    has_state: Boolean(state),
+    state_prefix: state ? String(state).slice(0, 10) : null,
+    error: error ? String(error) : null,
+    error_description: error_description ? String(error_description) : null
+  };
 
   if (error) {
     const msg = `TikTok error: ${error} ${error_description || ''}`;
@@ -766,6 +785,14 @@ app.get('/auth/tiktok/callback', async (req, res) => {
 
   if (!stateFromSessionOk && !stateFromStoreOk) {
     const msg = `State mismatch/expired. Retry Connect TikTok. got=${stateValue || 'none'}`;
+    lastOAuthDebug = {
+      ...lastOAuthDebug,
+      stage: 'state_failed',
+      state_from_session_ok: stateFromSessionOk,
+      state_from_store_ok: stateFromStoreOk,
+      session_state_prefix: sessionState ? String(sessionState).slice(0, 10) : null,
+      message: msg
+    };
     req.session.flash = {
       type: 'error',
       message: msg
@@ -782,6 +809,12 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     const tokenResp = await exchangeCodeForToken(String(code));
     if (!tokenResp.ok) {
       const msg = `Token exchange failed (HTTP ${tokenResp.status}): ${JSON.stringify(tokenResp.payload)}`;
+      lastOAuthDebug = {
+        ...lastOAuthDebug,
+        stage: 'token_failed',
+        token_http_status: tokenResp.status,
+        token_payload: tokenResp.payload
+      };
       req.session.flash = {
         type: 'error',
         message: msg
@@ -793,6 +826,11 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     const accessToken = String(data.access_token || '').trim();
     if (!accessToken) {
       const msg = `Token exchange returned no access_token: ${JSON.stringify(tokenResp.payload)}`;
+      lastOAuthDebug = {
+        ...lastOAuthDebug,
+        stage: 'token_no_access_token',
+        token_payload: tokenResp.payload
+      };
       req.session.flash = {
         type: 'error',
         message: msg
@@ -816,10 +854,21 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     globalTikTokAuth = tokenData;
 
     const okMsg = 'TikTok connected successfully.';
+    lastOAuthDebug = {
+      ...lastOAuthDebug,
+      stage: 'token_success',
+      open_id: tokenData.open_id || null,
+      expires_at: tokenData.expires_at || null
+    };
     req.session.flash = { type: 'ok', message: okMsg };
     return req.session.save((_saveErr) => res.redirect(oauthNoticeRedirect('ok', okMsg)));
   } catch (e) {
     const msg = `Callback error: ${String(e.message || e)}`;
+    lastOAuthDebug = {
+      ...lastOAuthDebug,
+      stage: 'callback_exception',
+      exception: String(e.message || e)
+    };
     req.session.flash = { type: 'error', message: msg };
     return res.redirect(oauthNoticeRedirect('error', msg));
   }
@@ -843,7 +892,8 @@ app.get('/api/status', (req, res) => {
     has_access_token: Boolean(t?.access_token),
     redirect_uri: TIKTOK_REDIRECT_URI,
     session_id: req.sessionID || null,
-    has_oauth_state: Boolean(req.session?.oauthState)
+    has_oauth_state: Boolean(req.session?.oauthState),
+    oauth_debug: lastOAuthDebug
   });
 });
 
