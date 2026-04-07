@@ -822,14 +822,18 @@ app.get('/auth/tiktok/callback', async (req, res) => {
       return res.redirect(oauthNoticeRedirect('error', msg));
     }
 
-    const data = tokenResp.payload?.data || {};
+    const rawTokenPayload = tokenResp.payload || {};
+    const data = (rawTokenPayload && typeof rawTokenPayload.data === 'object' && rawTokenPayload.data)
+      ? rawTokenPayload.data
+      : rawTokenPayload;
     const accessToken = String(data.access_token || '').trim();
     if (!accessToken) {
-      const msg = `Token exchange returned no access_token: ${JSON.stringify(tokenResp.payload)}`;
+      const payloadKeys = Object.keys(data || {});
+      const msg = `Token exchange returned no access_token. Payload keys: ${payloadKeys.join(', ') || 'none'}`;
       lastOAuthDebug = {
         ...lastOAuthDebug,
         stage: 'token_no_access_token',
-        token_payload: tokenResp.payload
+        token_payload_keys: payloadKeys
       };
       req.session.flash = {
         type: 'error',
