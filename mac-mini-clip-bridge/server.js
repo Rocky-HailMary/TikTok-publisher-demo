@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const {
@@ -9,13 +10,21 @@ const {
   BRIDGE_TOKEN = '',
   EXPORT_CLIPS_DIR = '/Users/rocky/.openclaw/workspaces/marketing/SyncFiles/export_clips',
   BRIDGE_BASE_URL = '',
-  BRIDGE_FILE_TOKEN = ''
+  BRIDGE_FILE_TOKEN = '',
+  FFMPEG_BIN = 'ffmpeg',
+  AUTO_GENERATE_THUMBS = 'true',
+  THUMB_CAPTURE_SEC = '0.20',
+  THUMB_MAX_WIDTH = '540'
 } = process.env;
 
 const app = express();
 app.use(express.json());
 const clipsRoot = path.resolve(EXPORT_CLIPS_DIR);
 const allowedClipExt = new Set(['.mp4', '.mov']);
+const autoGenerateThumbs = String(AUTO_GENERATE_THUMBS).toLowerCase() !== 'false';
+const thumbCaptureSec = Math.max(0, Number(THUMB_CAPTURE_SEC || 0.2));
+const thumbMaxWidth = Math.max(180, Number(THUMB_MAX_WIDTH || 540));
+const activeThumbJobs = new Set();
 
 function isAllowedClipExt(name) {
   return allowedClipExt.has(path.extname(name).toLowerCase());
@@ -36,6 +45,80 @@ function getSafeClipPath(name) {
   const rel = path.relative(clipsRoot, fullPath);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
   return fullPath;
+}
+
+function getThumbCandidates(clipName) {
+  return [
+    `${clipName}.thumb.jpg`,
+    `${clipName}.thumb.jpeg`,
+    `${clipName}.thumb.png`
+  ];
+}
+
+async function findExistingThumbName(clipName) {
+  const candidates = getThumbCandidates(clipName);
+  for (const candidate of candidates) {
+    if (await fileExists(path.join(clipsRoot, candidate))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function runCommand(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    p.stderr.on('data', (d) => { stderr += d.toString(); });
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (code === 0) return resolve();
+      return reject(new Error(`${cmd} exited ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+async function generateThumbForClip(clipName) {
+  const safeName = getSafeClipName(clipName);
+  if (!safeName) return { ok: false, error: 'invalid clip name' };
+
+  const existing = await findExistingThumbName(safeName);
+  if (existing) return { ok: true, generated: false, thumb: existing };
+
+  const clipPath = path.join(clipsRoot, safeName);
+  const clipExists = await fileExists(clipPath);
+  if (!clipExists) return { ok: false, error: 'clip not found' };
+
+  const targetThumb = `${safeName}.thumb.jpg`;
+  const targetPath = path.join(clipsRoot, targetThumb);
+
+  const args = [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-y',
+    '-ss', String(thumbCaptureSec),
+    '-i', clipPath,
+    '-frames:v', '1',
+    '-vf', `scale=${thumbMaxWidth}:-2:force_original_aspect_ratio=decrease`,
+    '-q:v', '3',
+    targetPath
+  ];
+
+  await runCommand(FFMPEG_BIN, args);
+
+  const made = await fileExists(targetPath);
+  if (!made) return { ok: false, error: 'thumbnail generation failed' };
+  return { ok: true, generated: true, thumb: targetThumb };
+}
+
+function scheduleThumbGeneration(clipName) {
+  if (!autoGenerateThumbs) return;
+  if (activeThumbJobs.has(clipName)) return;
+  activeThumbJobs.add(clipName);
+
+  generateThumbForClip(clipName)
+    .catch(() => null)
+    .finally(() => activeThumbJobs.delete(clipName));
 }
 
 function buildPublicUrl(pathname) {
@@ -156,18 +239,9 @@ async function buildClipRecord(name) {
 
   const clipUrl = withFileToken(buildPublicUrl(`/clips/${encodeURIComponent(name)}`));
 
-  const thumbCandidates = [
-    `${name}.thumb.jpg`,
-    `${name}.thumb.jpeg`,
-    `${name}.thumb.png`
-  ];
-
-  let thumbName = null;
-  for (const candidate of thumbCandidates) {
-    if (await fileExists(path.join(clipsRoot, candidate))) {
-      thumbName = candidate;
-      break;
-    }
+  let thumbName = await findExistingThumbName(name);
+  if (!thumbName && autoGenerateThumbs) {
+    scheduleThumbGeneration(name);
   }
 
   const postingInfo = await readPostingInfoForClip(name);
@@ -178,6 +252,7 @@ async function buildClipRecord(name) {
     mtime: stat.mtime.toISOString(),
     url: clipUrl,
     thumb_url: thumbName ? withFileToken(buildPublicUrl(`/support/${encodeURIComponent(thumbName)}`)) : null,
+    thumb_pending: !thumbName && autoGenerateThumbs,
     posting: postingInfo,
     support_files: {
       posting_json: postingInfo?.file || null,
@@ -214,6 +289,49 @@ app.get('/clips', requireBridgeToken, async (_req, res) => {
     const clips = records.filter(Boolean).sort((a, b) => (new Date(b.mtime).getTime() - new Date(a.mtime).getTime()));
 
     return res.json({ ok: true, clips });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/clips/generate-thumbs', requireBridgeToken, async (req, res) => {
+  const explicitNamesRaw = Array.isArray(req.body?.names) ? req.body.names : null;
+  const explicitNames = explicitNamesRaw
+    ? [...new Set(explicitNamesRaw.map((n) => String(n || '').trim()).filter(Boolean))]
+    : null;
+
+  try {
+    const names = await fsp.readdir(clipsRoot);
+    const clipNames = names.filter((n) => isAllowedClipExt(n));
+    const targets = (explicitNames && explicitNames.length)
+      ? clipNames.filter((n) => explicitNames.includes(n))
+      : clipNames;
+
+    const results = [];
+    for (const name of targets) {
+      const existing = await findExistingThumbName(name);
+      if (existing) {
+        results.push({ name, ok: true, generated: false, thumb: existing });
+        continue;
+      }
+      try {
+        const out = await generateThumbForClip(name);
+        results.push({ name, ...out });
+      } catch (e) {
+        results.push({ name, ok: false, error: String(e.message || e) });
+      }
+    }
+
+    const generated = results.filter((r) => r.ok && r.generated).length;
+    const failed = results.filter((r) => !r.ok).length;
+
+    return res.json({
+      ok: failed === 0,
+      total: results.length,
+      generated,
+      failed,
+      results
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
