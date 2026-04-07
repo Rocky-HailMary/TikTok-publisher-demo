@@ -85,6 +85,12 @@ function isAllowedClipName(name) {
   return ['.mp4', '.mov'].includes(path.extname(name).toLowerCase());
 }
 
+function oauthNoticeRedirect(type, message) {
+  const key = type === 'ok' ? 'oauth_ok' : 'oauth_error';
+  const text = String(message || '').trim() || (type === 'ok' ? 'OAuth success' : 'OAuth failed');
+  return `/?${key}=${encodeURIComponent(text)}`;
+}
+
 function cleanupOAuthStateStore() {
   const now = Date.now();
   for (const [state, createdAt] of oauthStateStore.entries()) {
@@ -312,6 +318,11 @@ function renderHome(req, res) {
   const expiresAt = tiktok?.expires_at ? fmtDate(tiktok.expires_at) : 'n/a';
   const flash = req.session.flash || null;
   req.session.flash = null;
+  const oauthErrorNotice = String(req.query?.oauth_error || '').trim();
+  const oauthOkNotice = String(req.query?.oauth_ok || '').trim();
+  const notice = flash || (oauthErrorNotice
+    ? { type: 'error', message: oauthErrorNotice }
+    : (oauthOkNotice ? { type: 'ok', message: oauthOkNotice } : null));
 
   const html = `<!doctype html>
 <html>
@@ -407,7 +418,7 @@ function renderHome(req, res) {
   <h1>Dance Guru TikTok Review Demo</h1>
   <p class="muted">Domain: ${APP_BASE_URL}</p>
 
-  ${flash ? `<div class="card ${flash.type === 'error' ? 'bad' : 'ok'}">${flash.message}</div>` : ''}
+  ${notice ? `<div class="card ${notice.type === 'error' ? 'bad' : 'ok'}">${notice.message}</div>` : ''}
 
   <div class="card">
     <h3>Config check</h3>
@@ -710,8 +721,9 @@ app.get('/', renderHome);
 app.get('/auth/tiktok/start', (req, res) => {
   const missing = mustHaveConfig();
   if (missing.length) {
-    req.session.flash = { type: 'error', message: `Missing env vars: ${missing.join(', ')}` };
-    return req.session.save(() => res.redirect('/'));
+    const msg = `Missing env vars: ${missing.join(', ')}`;
+    req.session.flash = { type: 'error', message: msg };
+    return req.session.save(() => res.redirect(oauthNoticeRedirect('error', msg)));
   }
 
   const state = crypto.randomBytes(24).toString('hex');
@@ -734,13 +746,15 @@ app.get('/auth/tiktok/callback', async (req, res) => {
   const { code, state, error, error_description } = req.query;
 
   if (error) {
-    req.session.flash = { type: 'error', message: `TikTok error: ${error} ${error_description || ''}` };
-    return res.redirect('/');
+    const msg = `TikTok error: ${error} ${error_description || ''}`;
+    req.session.flash = { type: 'error', message: msg };
+    return res.redirect(oauthNoticeRedirect('error', msg));
   }
 
   if (!code) {
-    req.session.flash = { type: 'error', message: 'Missing authorization code in callback.' };
-    return res.redirect('/');
+    const msg = 'Missing authorization code in callback.';
+    req.session.flash = { type: 'error', message: msg };
+    return res.redirect(oauthNoticeRedirect('error', msg));
   }
 
   const now = Date.now();
@@ -751,11 +765,12 @@ app.get('/auth/tiktok/callback', async (req, res) => {
   const stateFromStoreOk = Boolean(stateCreatedAt && (now - stateCreatedAt <= oauthStateTtlMs));
 
   if (!stateFromSessionOk && !stateFromStoreOk) {
+    const msg = `State mismatch/expired. Retry Connect TikTok. got=${stateValue || 'none'}`;
     req.session.flash = {
       type: 'error',
-      message: `State mismatch/expired. Retry Connect TikTok. got=${stateValue || 'none'}`
+      message: msg
     };
-    return req.session.save(() => res.redirect('/'));
+    return req.session.save(() => res.redirect(oauthNoticeRedirect('error', msg)));
   }
 
   if (stateValue) {
@@ -766,21 +781,23 @@ app.get('/auth/tiktok/callback', async (req, res) => {
   try {
     const tokenResp = await exchangeCodeForToken(String(code));
     if (!tokenResp.ok) {
+      const msg = `Token exchange failed (HTTP ${tokenResp.status}): ${JSON.stringify(tokenResp.payload)}`;
       req.session.flash = {
         type: 'error',
-        message: `Token exchange failed (HTTP ${tokenResp.status}): ${JSON.stringify(tokenResp.payload)}`
+        message: msg
       };
-      return res.redirect('/');
+      return res.redirect(oauthNoticeRedirect('error', msg));
     }
 
     const data = tokenResp.payload?.data || {};
     const accessToken = String(data.access_token || '').trim();
     if (!accessToken) {
+      const msg = `Token exchange returned no access_token: ${JSON.stringify(tokenResp.payload)}`;
       req.session.flash = {
         type: 'error',
-        message: `Token exchange returned no access_token: ${JSON.stringify(tokenResp.payload)}`
+        message: msg
       };
-      return res.redirect('/');
+      return res.redirect(oauthNoticeRedirect('error', msg));
     }
 
     const expiresIn = Number(data.expires_in || 0);
@@ -798,16 +815,13 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     req.session.tiktok = tokenData;
     globalTikTokAuth = tokenData;
 
-    req.session.flash = { type: 'ok', message: 'TikTok connected successfully.' };
-    return req.session.save((saveErr) => {
-      if (saveErr) {
-        return res.redirect('/');
-      }
-      return res.redirect('/');
-    });
+    const okMsg = 'TikTok connected successfully.';
+    req.session.flash = { type: 'ok', message: okMsg };
+    return req.session.save((_saveErr) => res.redirect(oauthNoticeRedirect('ok', okMsg)));
   } catch (e) {
-    req.session.flash = { type: 'error', message: `Callback error: ${String(e.message || e)}` };
-    return res.redirect('/');
+    const msg = `Callback error: ${String(e.message || e)}`;
+    req.session.flash = { type: 'error', message: msg };
+    return res.redirect(oauthNoticeRedirect('error', msg));
   }
 });
 
