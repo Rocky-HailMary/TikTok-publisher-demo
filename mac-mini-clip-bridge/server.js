@@ -11,7 +11,7 @@ const {
   EXPORT_CLIPS_DIR = '/Users/rocky/.openclaw/workspaces/marketing/SyncFiles/export_clips',
   BRIDGE_BASE_URL = '',
   BRIDGE_FILE_TOKEN = '',
-  FFMPEG_BIN = 'ffmpeg',
+  FFMPEG_BIN = '/opt/homebrew/bin/ffmpeg',
   AUTO_GENERATE_THUMBS = 'true',
   THUMB_CAPTURE_SEC = '0.20',
   THUMB_MAX_WIDTH = '540'
@@ -25,6 +25,8 @@ const autoGenerateThumbs = String(AUTO_GENERATE_THUMBS).toLowerCase() !== 'false
 const thumbCaptureSec = Math.max(0, Number(THUMB_CAPTURE_SEC || 0.2));
 const thumbMaxWidth = Math.max(180, Number(THUMB_MAX_WIDTH || 540));
 const activeThumbJobs = new Set();
+const ffmpegBin = (fs.existsSync(FFMPEG_BIN) && FFMPEG_BIN)
+  || (fs.existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : 'ffmpeg');
 
 function isAllowedClipExt(name) {
   return allowedClipExt.has(path.extname(name).toLowerCase());
@@ -104,7 +106,7 @@ async function generateThumbForClip(clipName) {
     targetPath
   ];
 
-  await runCommand(FFMPEG_BIN, args);
+  await runCommand(ffmpegBin, args);
 
   const made = await fileExists(targetPath);
   if (!made) return { ok: false, error: 'thumbnail generation failed' };
@@ -277,6 +279,8 @@ app.get('/health', async (_req, res) => {
     clips_root: clipsRoot,
     bridge_base_url: BRIDGE_BASE_URL || null,
     clip_count_hint: clipCount,
+    auto_generate_thumbs: autoGenerateThumbs,
+    ffmpeg_bin: ffmpegBin,
     time: new Date().toISOString()
   });
 });
