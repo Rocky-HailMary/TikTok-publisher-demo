@@ -13,6 +13,7 @@ const {
 } = process.env;
 
 const app = express();
+app.use(express.json());
 const clipsRoot = path.resolve(EXPORT_CLIPS_DIR);
 const allowedExt = new Set(['.mp4', '.mov']);
 
@@ -108,6 +109,53 @@ app.get('/clips', requireBridgeToken, async (_req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
+});
+
+app.post('/clips/delete', requireBridgeToken, async (req, res) => {
+  const rawNames = Array.isArray(req.body?.names) ? req.body.names : [];
+  const names = [...new Set(rawNames.map((n) => String(n || '').trim()).filter(Boolean))];
+
+  if (!names.length) {
+    return res.status(400).json({ ok: false, error: 'Provide one or more clip names in body.names' });
+  }
+
+  const deleted = [];
+  const missing = [];
+  const invalid = [];
+  const errors = [];
+
+  for (const name of names) {
+    const fullPath = getSafeClipPath(name);
+    if (!fullPath) {
+      invalid.push(name);
+      continue;
+    }
+
+    try {
+      const stat = await fsp.stat(fullPath);
+      if (!stat.isFile()) {
+        missing.push(name);
+        continue;
+      }
+      await fsp.unlink(fullPath);
+      deleted.push(name);
+    } catch (e) {
+      if (e && e.code === 'ENOENT') {
+        missing.push(name);
+      } else {
+        errors.push({ name, error: String(e.message || e) });
+      }
+    }
+  }
+
+  return res.json({
+    ok: errors.length === 0,
+    requested: names,
+    deleted,
+    missing,
+    invalid,
+    errors
+  });
 });
 
 app.get('/clips/:name', requireFileTokenIfEnabled, async (req, res) => {

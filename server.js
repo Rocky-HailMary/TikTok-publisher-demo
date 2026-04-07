@@ -259,6 +259,32 @@ async function fetchMacBridgeClips() {
   return { ok: resp.ok, status: resp.status, payload };
 }
 
+async function deleteMacBridgeClips(names) {
+  if (!MAC_BRIDGE_BASE_URL) {
+    return { ok: false, status: 500, payload: { ok: false, error: 'MAC_BRIDGE_BASE_URL is not configured' } };
+  }
+
+  const url = new URL('/clips/delete', MAC_BRIDGE_BASE_URL).toString();
+  const headers = { 'Content-Type': 'application/json' };
+  if (MAC_BRIDGE_TOKEN) headers.Authorization = `Bearer ${MAC_BRIDGE_TOKEN}`;
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ names })
+  });
+
+  const text = await resp.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { raw: text };
+  }
+
+  return { ok: resp.ok, status: resp.status, payload };
+}
+
 function renderHome(req, res) {
   const missing = mustHaveConfig();
   const tiktok = req.session.tiktok || null;
@@ -288,7 +314,7 @@ function renderHome(req, res) {
     .row > button { width: auto; }
     .clip-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(110px, 110px));
+      grid-template-columns: repeat(auto-fill, minmax(154px, 154px));
       justify-content: start;
       gap: 12px;
       margin: 10px 0 12px;
@@ -301,6 +327,8 @@ function renderHome(req, res) {
       background: #fff;
       padding: 0;
       overflow: hidden;
+      position: relative;
+      cursor: pointer;
       transition: border-color .15s ease, box-shadow .15s ease;
     }
     .clip-card:hover {
@@ -309,6 +337,24 @@ function renderHome(req, res) {
     .clip-card.selected {
       border-color: #111;
       box-shadow: 0 0 0 2px #111 inset;
+    }
+    .clip-check-wrap {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      z-index: 2;
+      background: rgba(255, 255, 255, 0.92);
+      border-radius: 6px;
+      padding: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .clip-check {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      cursor: pointer;
     }
     .clip-thumb {
       width: 100%;
@@ -383,6 +429,7 @@ function renderHome(req, res) {
     <p class="muted">Shows clips currently available in SyncFiles/export_clips via the Mac bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
     <div class="row">
       <button id="loadMacClipsBtn" type="button">Load clips from Mac mini</button>
+      <button id="deleteMacClipsBtn" type="button">Delete Selected</button>
     </div>
 
     <div id="mac_clip_grid" class="clip-grid"></div>
@@ -437,12 +484,14 @@ function renderHome(req, res) {
     });
 
     const loadMacClipsBtn = document.getElementById('loadMacClipsBtn');
+    const deleteMacClipsBtn = document.getElementById('deleteMacClipsBtn');
     const publishMacClipBtn = document.getElementById('publishMacClipBtn');
     const macResult = document.getElementById('macResult');
     const macClipGrid = document.getElementById('mac_clip_grid');
     const selectedMacClipLabel = document.getElementById('selected_mac_clip');
 
     let selectedMacClip = '';
+    let currentMacClips = [];
 
     function formatClipSize(bytes) {
       const mb = Number(bytes || 0) / (1024 * 1024);
@@ -471,6 +520,13 @@ function renderHome(req, res) {
       }
     }
 
+    function getCheckedMacClips() {
+      const checks = macClipGrid.querySelectorAll('.clip-check:checked');
+      return Array.from(checks)
+        .map((check) => String(check.dataset.name || ''))
+        .filter(Boolean);
+    }
+
     function setSelectedMacClip(name) {
       selectedMacClip = name || '';
       selectedMacClipLabel.textContent = selectedMacClip || 'None';
@@ -481,8 +537,9 @@ function renderHome(req, res) {
     }
 
     function renderMacClipGrid(clips) {
+      currentMacClips = Array.isArray(clips) ? clips : [];
       macClipGrid.innerHTML = '';
-      if (!clips.length) {
+      if (!currentMacClips.length) {
         selectedMacClip = '';
         selectedMacClipLabel.textContent = 'None';
         const empty = document.createElement('p');
@@ -492,11 +549,20 @@ function renderHome(req, res) {
         return;
       }
 
-      clips.forEach((clip) => {
-        const card = document.createElement('button');
-        card.type = 'button';
+      currentMacClips.forEach((clip) => {
+        const card = document.createElement('div');
         card.className = 'clip-card';
         card.dataset.name = clip.name;
+
+        const checkWrap = document.createElement('div');
+        checkWrap.className = 'clip-check-wrap';
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'clip-check';
+        check.dataset.name = clip.name;
+        check.title = 'Select for deletion';
+        check.addEventListener('click', (event) => event.stopPropagation());
+        checkWrap.appendChild(check);
 
         const thumb = document.createElement('div');
         thumb.className = 'clip-thumb';
@@ -523,6 +589,7 @@ function renderHome(req, res) {
         meta.appendChild(name);
         meta.appendChild(sub);
 
+        card.appendChild(checkWrap);
         card.appendChild(thumb);
         card.appendChild(meta);
 
@@ -533,10 +600,10 @@ function renderHome(req, res) {
         macClipGrid.appendChild(card);
       });
 
-      setSelectedMacClip(clips[0].name);
+      setSelectedMacClip(currentMacClips[0].name);
     }
 
-    loadMacClipsBtn.addEventListener('click', async () => {
+    async function loadMacClips() {
       macResult.textContent = 'Loading clips...';
       try {
         const r = await fetch('/mac/clips');
@@ -549,6 +616,37 @@ function renderHome(req, res) {
         const clips = Array.isArray(d.clips) ? d.clips : [];
         renderMacClipGrid(clips);
         macResult.textContent = JSON.stringify({ ok: true, clip_count: clips.length }, null, 2);
+      } catch (err) {
+        macResult.textContent = String(err);
+      }
+    }
+
+    loadMacClipsBtn.addEventListener('click', loadMacClips);
+
+    deleteMacClipsBtn.addEventListener('click', async () => {
+      const names = getCheckedMacClips();
+      if (!names.length) {
+        macResult.textContent = 'Check one or more clip boxes first.';
+        return;
+      }
+
+      const confirmed = window.confirm('Delete ' + names.length + ' selected clip(s) from Mac mini export_clips?');
+      if (!confirmed) return;
+
+      macResult.textContent = 'Deleting selected clips...';
+      try {
+        const r = await fetch('/mac/clips/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names })
+        });
+        const d = await r.json();
+        macResult.textContent = JSON.stringify(d, null, 2);
+
+        if (r.ok && d.ok) {
+          await loadMacClips();
+          macResult.textContent = JSON.stringify(d, null, 2);
+        }
       } catch (err) {
         macResult.textContent = String(err);
       }
@@ -715,6 +813,40 @@ app.get('/mac/clips', async (_req, res) => {
       clip_count: clips.length,
       clips,
       bridge: MAC_BRIDGE_BASE_URL
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+app.post('/mac/clips/delete', async (req, res) => {
+  const namesRaw = Array.isArray(req.body?.names) ? req.body.names : [];
+  const names = [...new Set(
+    namesRaw
+      .map((n) => String(n || '').trim())
+      .filter((n) => isAllowedClipName(n))
+  )];
+
+  if (!names.length) {
+    return res.status(400).json({ ok: false, error: 'Provide one or more valid clip names in body.names' });
+  }
+
+  try {
+    const bridgeResp = await deleteMacBridgeClips(names);
+    if (!bridgeResp.ok) {
+      return res.status(bridgeResp.status || 502).json({
+        ok: false,
+        error: 'Failed to delete clips on Mac bridge',
+        bridge_status: bridgeResp.status,
+        bridge_payload: bridgeResp.payload
+      });
+    }
+
+    return res.json({
+      ok: true,
+      requested: names,
+      bridge: MAC_BRIDGE_BASE_URL,
+      result: bridgeResp.payload
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
