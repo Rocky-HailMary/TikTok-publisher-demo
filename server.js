@@ -458,6 +458,9 @@ function renderHome(req, res) {
       justify-content: center;
       padding: 20px;
     }
+    .clip-player-backdrop[hidden] {
+      display: none !important;
+    }
     .clip-player-modal {
       width: min(92vw, 520px);
       background: #0f0f10;
