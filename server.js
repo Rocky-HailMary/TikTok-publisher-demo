@@ -37,6 +37,10 @@ const uploadDir = path.join('/tmp', 'dg-tiktok-upload-cache');
 const maxUploadBytes = Math.max(1, Number(MAX_UPLOAD_MB || 200)) * 1024 * 1024;
 const uploadTtlMs = Math.max(5, Number(LOCAL_UPLOAD_TTL_MIN || 120)) * 60 * 1000;
 
+const oauthStateStore = new Map();
+const oauthStateTtlMs = 10 * 60 * 1000;
+let globalTikTokAuth = null;
+
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -81,6 +85,19 @@ function isAllowedClipName(name) {
   return ['.mp4', '.mov'].includes(path.extname(name).toLowerCase());
 }
 
+function cleanupOAuthStateStore() {
+  const now = Date.now();
+  for (const [state, createdAt] of oauthStateStore.entries()) {
+    if (now - createdAt > oauthStateTtlMs) {
+      oauthStateStore.delete(state);
+    }
+  }
+}
+
+function getActiveTikTokAuth(req) {
+  return req.session?.tiktok || globalTikTokAuth || null;
+}
+
 async function cleanupUploadCache() {
   try {
     const files = await fsp.readdir(uploadDir);
@@ -103,6 +120,7 @@ async function cleanupUploadCache() {
 }
 
 setInterval(cleanupUploadCache, 15 * 60 * 1000).unref();
+setInterval(cleanupOAuthStateStore, 2 * 60 * 1000).unref();
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -287,7 +305,7 @@ async function deleteMacBridgeClips(names) {
 
 function renderHome(req, res) {
   const missing = mustHaveConfig();
-  const tiktok = req.session.tiktok || null;
+  const tiktok = getActiveTikTokAuth(req);
   const connected = Boolean(tiktok?.access_token);
   const openId = tiktok?.open_id || 'n/a';
   const createdAt = fmtDate(tiktok?.created_at);
@@ -697,12 +715,16 @@ app.get('/auth/tiktok/start', (req, res) => {
   }
 
   const state = crypto.randomBytes(24).toString('hex');
+  oauthStateStore.set(state, Date.now());
+
+  // Keep session state too (best effort) for browsers that preserve cookies.
   req.session.oauthState = state;
   req.session.oauthStateCreatedAt = Date.now();
+
   return req.session.save((err) => {
     if (err) {
-      req.session.flash = { type: 'error', message: `Session error before OAuth: ${String(err.message || err)}` };
-      return req.session.save(() => res.redirect('/'));
+      // Even if session save fails, we can still proceed using in-memory state store.
+      return res.redirect(authUrl(state));
     }
     return res.redirect(authUrl(state));
   });
@@ -721,13 +743,25 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     return res.redirect('/');
   }
 
-  if (!state || state !== req.session.oauthState) {
+  const now = Date.now();
+  const sessionState = String(req.session?.oauthState || '');
+  const stateValue = String(state || '');
+  const stateFromSessionOk = Boolean(stateValue && sessionState && stateValue === sessionState);
+  const stateCreatedAt = oauthStateStore.get(stateValue);
+  const stateFromStoreOk = Boolean(stateCreatedAt && (now - stateCreatedAt <= oauthStateTtlMs));
+
+  if (!stateFromSessionOk && !stateFromStoreOk) {
     req.session.flash = {
       type: 'error',
-      message: `State mismatch. Please retry OAuth. expected=${req.session.oauthState || 'none'} got=${state || 'none'}`
+      message: `State mismatch/expired. Retry Connect TikTok. got=${stateValue || 'none'}`
     };
     return req.session.save(() => res.redirect('/'));
   }
+
+  if (stateValue) {
+    oauthStateStore.delete(stateValue);
+  }
+  req.session.oauthState = null;
 
   try {
     const tokenResp = await exchangeCodeForToken(String(code));
@@ -750,8 +784,7 @@ app.get('/auth/tiktok/callback', async (req, res) => {
     }
 
     const expiresIn = Number(data.expires_in || 0);
-    const now = Date.now();
-    req.session.tiktok = {
+    const tokenData = {
       access_token: accessToken,
       refresh_token: data.refresh_token,
       open_id: data.open_id,
@@ -761,10 +794,14 @@ app.get('/auth/tiktok/callback', async (req, res) => {
       raw: tokenResp.payload
     };
 
+    // Save to both session and global fallback to tolerate strict/no-cookie browsers.
+    req.session.tiktok = tokenData;
+    globalTikTokAuth = tokenData;
+
     req.session.flash = { type: 'ok', message: 'TikTok connected successfully.' };
     return req.session.save((saveErr) => {
       if (saveErr) {
-        req.session.flash = { type: 'error', message: `Session save failed: ${String(saveErr.message || saveErr)}` };
+        return res.redirect('/');
       }
       return res.redirect('/');
     });
@@ -777,12 +814,13 @@ app.get('/auth/tiktok/callback', async (req, res) => {
 app.get('/auth/tiktok/logout', (req, res) => {
   req.session.tiktok = null;
   req.session.oauthState = null;
+  globalTikTokAuth = null;
   req.session.flash = { type: 'ok', message: 'Disconnected TikTok session.' };
   res.redirect('/');
 });
 
 app.get('/api/status', (req, res) => {
-  const t = req.session.tiktok || null;
+  const t = getActiveTikTokAuth(req);
   res.json({
     ok: true,
     connected: Boolean(t?.access_token),
@@ -871,7 +909,7 @@ app.get('/uploads/:file', async (req, res) => {
 });
 
 app.post('/publish/upload', upload.single('video'), async (req, res) => {
-  const t = req.session.tiktok || null;
+  const t = getActiveTikTokAuth(req);
   if (!t?.access_token) {
     if (req.file?.path) {
       try { await fsp.unlink(req.file.path); } catch {}
@@ -917,7 +955,7 @@ app.post('/publish/upload', upload.single('video'), async (req, res) => {
 });
 
 app.post('/publish/mac-clip', async (req, res) => {
-  const t = req.session.tiktok || null;
+  const t = getActiveTikTokAuth(req);
   if (!t?.access_token) {
     return res.status(401).json({ ok: false, error: 'Not connected. Run OAuth first.' });
   }
