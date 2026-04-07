@@ -29,7 +29,8 @@ const {
   LOCAL_UPLOAD_TTL_MIN = '120',
   MAC_BRIDGE_BASE_URL = '',
   MAC_BRIDGE_TOKEN = '',
-  MAC_BRIDGE_FILE_TOKEN = ''
+  MAC_BRIDGE_FILE_TOKEN = '',
+  APPROVED_TIKTOK_OPEN_IDS = ''
 } = process.env;
 
 const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
@@ -39,8 +40,13 @@ const uploadTtlMs = Math.max(5, Number(LOCAL_UPLOAD_TTL_MIN || 120)) * 60 * 1000
 
 const oauthStateStore = new Map();
 const oauthStateTtlMs = 10 * 60 * 1000;
-let globalTikTokAuth = null;
 let lastOAuthDebug = null;
+const approvedOpenIds = new Set(
+  String(APPROVED_TIKTOK_OPEN_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -101,8 +107,31 @@ function cleanupOAuthStateStore() {
   }
 }
 
+function isApprovedTikTokOpenId(openId) {
+  if (!openId) return false;
+  if (!approvedOpenIds.size) return false;
+  return approvedOpenIds.has(String(openId));
+}
+
 function getActiveTikTokAuth(req) {
-  return req.session?.tiktok || globalTikTokAuth || null;
+  return req.session?.tiktok || null;
+}
+
+function requireApprovedTikTok(req, res, next) {
+  const t = getActiveTikTokAuth(req);
+  if (!t?.access_token) {
+    return res.status(401).json({ ok: false, error: 'Not connected. Connect TikTok first.' });
+  }
+
+  if (!isApprovedTikTokOpenId(t.open_id)) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Connected TikTok account is not approved for this app.',
+      open_id: t.open_id || null
+    });
+  }
+
+  return next();
 }
 
 async function cleanupUploadCache() {
@@ -169,6 +198,7 @@ function mustHaveConfig() {
   if (!TIKTOK_CLIENT_KEY) missing.push('TIKTOK_CLIENT_KEY');
   if (!TIKTOK_CLIENT_SECRET) missing.push('TIKTOK_CLIENT_SECRET');
   if (!TIKTOK_REDIRECT_URI) missing.push('TIKTOK_REDIRECT_URI');
+  if (!approvedOpenIds.size) missing.push('APPROVED_TIKTOK_OPEN_IDS');
   return missing;
 }
 
@@ -315,6 +345,7 @@ function renderHome(req, res) {
   const tiktok = getActiveTikTokAuth(req);
   const connected = Boolean(tiktok?.access_token);
   const openId = tiktok?.open_id || 'n/a';
+  const isApproved = connected ? isApprovedTikTokOpenId(tiktok?.open_id) : false;
   const createdAt = fmtDate(tiktok?.created_at);
   const expiresAt = tiktok?.expires_at ? fmtDate(tiktok.expires_at) : 'n/a';
   const flash = req.session.flash || null;
@@ -598,8 +629,10 @@ function renderHome(req, res) {
   <div class="card">
     <h3>1) Connect TikTok (OAuth)</h3>
     <p>Status: ${connected ? '<span class="ok">Connected</span>' : '<span class="bad">Not connected</span>'}</p>
+    <p>Approved account: ${connected ? (isApproved ? '<span class="ok">Yes</span>' : '<span class="bad">No</span>') : '<span class="bad">No</span>'}</p>
     <p class="muted">open_id: ${openId}</p>
     <p class="muted">token created_at: ${createdAt} | expires_at: ${expiresAt}</p>
+    ${connected && !isApproved ? '<p class="bad">This TikTok account is not approved to use upload/clip actions on this site.</p>' : ''}
     <p>
       <a href="/auth/tiktok/start"><button>Connect TikTok</button></a>
       <a href="/auth/tiktok/logout"><button>Disconnect</button></a>
@@ -1104,9 +1137,19 @@ app.get('/auth/tiktok/callback', async (req, res) => {
       raw: tokenResp.payload
     };
 
-    // Save to both session and global fallback to tolerate strict/no-cookie browsers.
+    if (!isApprovedTikTokOpenId(tokenData.open_id)) {
+      const msg = `TikTok connected, but this account is not approved for this app. open_id=${tokenData.open_id || 'unknown'}`;
+      req.session.tiktok = null;
+      lastOAuthDebug = {
+        ...lastOAuthDebug,
+        stage: 'token_unapproved_open_id',
+        open_id: tokenData.open_id || null,
+        approved_open_ids_count: approvedOpenIds.size
+      };
+      return req.session.save(() => res.redirect(oauthNoticeRedirect('error', msg)));
+    }
+
     req.session.tiktok = tokenData;
-    globalTikTokAuth = tokenData;
 
     const okMsg = 'TikTok connected successfully.';
     lastOAuthDebug = {
@@ -1132,16 +1175,18 @@ app.get('/auth/tiktok/callback', async (req, res) => {
 app.get('/auth/tiktok/logout', (req, res) => {
   req.session.tiktok = null;
   req.session.oauthState = null;
-  globalTikTokAuth = null;
   req.session.flash = { type: 'ok', message: 'Disconnected TikTok session.' };
   res.redirect('/');
 });
 
 app.get('/api/status', (req, res) => {
   const t = getActiveTikTokAuth(req);
+  const approved = Boolean(t?.open_id && isApprovedTikTokOpenId(t.open_id));
   res.json({
     ok: true,
     connected: Boolean(t?.access_token),
+    approved,
+    approved_open_ids_count: approvedOpenIds.size,
     open_id: t?.open_id || null,
     expires_at: t?.expires_at || null,
     has_access_token: Boolean(t?.access_token),
@@ -1152,7 +1197,7 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/mac/clips', async (_req, res) => {
+app.get('/mac/clips', requireApprovedTikTok, async (_req, res) => {
   try {
     const bridgeResp = await fetchMacBridgeClips();
     if (!bridgeResp.ok) {
@@ -1176,7 +1221,7 @@ app.get('/mac/clips', async (_req, res) => {
   }
 });
 
-app.post('/mac/clips/delete', async (req, res) => {
+app.post('/mac/clips/delete', requireApprovedTikTok, async (req, res) => {
   const namesRaw = Array.isArray(req.body?.names) ? req.body.names : [];
   const names = [...new Set(
     namesRaw
@@ -1227,7 +1272,7 @@ app.get('/uploads/:file', async (req, res) => {
   }
 });
 
-app.post('/publish/upload', upload.single('video'), async (req, res) => {
+app.post('/publish/upload', requireApprovedTikTok, upload.single('video'), async (req, res) => {
   const t = getActiveTikTokAuth(req);
   if (!t?.access_token) {
     if (req.file?.path) {
@@ -1273,7 +1318,7 @@ app.post('/publish/upload', upload.single('video'), async (req, res) => {
   }
 });
 
-app.post('/publish/mac-clip', async (req, res) => {
+app.post('/publish/mac-clip', requireApprovedTikTok, async (req, res) => {
   const t = getActiveTikTokAuth(req);
   if (!t?.access_token) {
     return res.status(401).json({ ok: false, error: 'Not connected. Run OAuth first.' });
