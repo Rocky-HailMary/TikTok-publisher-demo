@@ -21,7 +21,6 @@ const {
   TIKTOK_SCOPES = 'user.info.basic,video.publish',
   TIKTOK_AUTH_BASE = 'https://www.tiktok.com',
   TIKTOK_API_BASE = 'https://open.tiktokapis.com',
-  DEMO_VIDEO_URL = '',
   SESSION_SECRET = 'change-this-in-production',
   ALLOWED_ORIGINS = 'https://www.hypercreative.games,https://hypercreative.games',
   SESSION_COOKIE_DOMAIN = '',
@@ -277,16 +276,66 @@ function renderHome(req, res) {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Dance Guru TikTok Demo</title>
   <style>
-    body { font-family: Inter, system-ui, Arial, sans-serif; margin: 24px; max-width: 860px; }
+    body { font-family: Inter, system-ui, Arial, sans-serif; margin: 24px; max-width: 980px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
     .ok { color: #0f7a2c; }
     .bad { color: #a12121; }
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #aaa; cursor: pointer; }
-    input, textarea, select { width: 100%; padding: 9px; margin: 6px 0 10px; border: 1px solid #bbb; border-radius: 8px; }
+    input, textarea { width: 100%; padding: 9px; margin: 6px 0 10px; border: 1px solid #bbb; border-radius: 8px; }
     pre { background:#111; color:#f7f7f7; padding: 12px; border-radius: 10px; overflow:auto; max-height: 260px; }
     .muted { color: #666; font-size: 13px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; }
     .row > button { width: auto; }
+    .clip-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 10px 0 12px;
+    }
+    .clip-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #bbb;
+      border-radius: 10px;
+      background: #fff;
+      padding: 0;
+      overflow: hidden;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .clip-card:hover {
+      border-color: #666;
+    }
+    .clip-card.selected {
+      border-color: #111;
+      box-shadow: 0 0 0 2px #111 inset;
+    }
+    .clip-thumb {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      background: #000;
+    }
+    .clip-thumb video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      background: #000;
+    }
+    .clip-meta {
+      padding: 8px 10px 10px;
+    }
+    .clip-name {
+      font-size: 12px;
+      font-weight: 600;
+      word-break: break-word;
+      line-height: 1.35;
+      margin-bottom: 4px;
+    }
+    .clip-sub {
+      font-size: 11px;
+      color: #666;
+      line-height: 1.35;
+    }
   </style>
 </head>
 <body>
@@ -313,21 +362,7 @@ function renderHome(req, res) {
   </div>
 
   <div class="card">
-    <h3>2) Publish test video (sandbox/demo)</h3>
-    <form id="publishForm">
-      <label>Video URL (public):</label>
-      <input id="video_url" name="video_url" placeholder="https://.../demo.mp4" value="${DEMO_VIDEO_URL || ''}" />
-
-      <label>Caption:</label>
-      <textarea id="caption" name="caption" rows="3" placeholder="Test post from Dance Guru demo">Dance Guru TikTok API demo post</textarea>
-
-      <button type="submit">Publish Test</button>
-    </form>
-    <pre id="result">No publish attempt yet.</pre>
-  </div>
-
-  <div class="card">
-    <h3>3) Upload from this device (no cloud storage required)</h3>
+    <h3>2) Upload from this device (no cloud storage required)</h3>
     <p class="muted">File is uploaded to this backend, exposed temporarily as a short-lived URL, then TikTok pulls it.</p>
     <p class="muted">Max upload size: ${Math.round(maxUploadBytes / (1024 * 1024))} MB</p>
     <form id="uploadForm" enctype="multipart/form-data">
@@ -335,7 +370,7 @@ function renderHome(req, res) {
       <input id="video_file" name="video" type="file" accept="video/mp4,video/quicktime,.mp4,.mov" required />
 
       <label>Caption:</label>
-      <textarea id="upload_caption" name="caption" rows="3" placeholder="Test post from Dance Guru demo">Dance Guru TikTok API demo post</textarea>
+      <textarea id="upload_caption" name="caption" rows="3" placeholder="Post caption">Dance Guru TikTok API demo post</textarea>
 
       <button type="submit">Upload & Publish</button>
     </form>
@@ -343,16 +378,14 @@ function renderHome(req, res) {
   </div>
 
   <div class="card">
-    <h3>4) Browse Mac mini export clips</h3>
-    <p class="muted">Loads clips from configured bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
+    <h3>3) Upload from Mac mini export clips</h3>
+    <p class="muted">Shows clips currently available in SyncFiles/export_clips via the Mac bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
     <div class="row">
       <button id="loadMacClipsBtn" type="button">Load clips from Mac mini</button>
     </div>
 
-    <label>Available clips:</label>
-    <select id="mac_clip_select">
-      <option value="">Load clips first...</option>
-    </select>
+    <div id="mac_clip_grid" class="clip-grid"></div>
+    <p class="muted">Selected clip: <strong id="selected_mac_clip">None</strong></p>
 
     <label>Caption:</label>
     <textarea id="mac_caption" rows="3">Dance Guru TikTok API demo post</textarea>
@@ -367,37 +400,15 @@ function renderHome(req, res) {
       <li>Show this domain + URL in browser address bar.</li>
       <li>Click Connect TikTok and show consent screen.</li>
       <li>Return to app showing connected state.</li>
-      <li>Publish test and show API response payload.</li>
-      <li>Optional: show local file upload + publish for no-cloud workflow.</li>
-      <li>Optional: browse Mac mini export clips and publish one clip.</li>
+      <li>Upload from device and show API response payload.</li>
+      <li>Load Mac mini clips as thumbnails, select one, and publish.</li>
     </ul>
   </div>
 
   <script>
-    const form = document.getElementById('publishForm');
-    const result = document.getElementById('result');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      result.textContent = 'Publishing...';
-      const payload = {
-        video_url: document.getElementById('video_url').value,
-        caption: document.getElementById('caption').value
-      };
-      try {
-        const r = await fetch('/publish/test', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        const d = await r.json();
-        result.textContent = JSON.stringify(d, null, 2);
-      } catch (err) {
-        result.textContent = String(err);
-      }
-    });
-
     const uploadForm = document.getElementById('uploadForm');
     const uploadResult = document.getElementById('uploadResult');
+
     uploadForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fileInput = document.getElementById('video_file');
@@ -426,7 +437,76 @@ function renderHome(req, res) {
     const loadMacClipsBtn = document.getElementById('loadMacClipsBtn');
     const publishMacClipBtn = document.getElementById('publishMacClipBtn');
     const macResult = document.getElementById('macResult');
-    const macSelect = document.getElementById('mac_clip_select');
+    const macClipGrid = document.getElementById('mac_clip_grid');
+    const selectedMacClipLabel = document.getElementById('selected_mac_clip');
+
+    let selectedMacClip = '';
+
+    function formatClipSize(bytes) {
+      const mb = Number(bytes || 0) / (1024 * 1024);
+      return mb.toFixed(2) + ' MB';
+    }
+
+    function setSelectedMacClip(name) {
+      selectedMacClip = name || '';
+      selectedMacClipLabel.textContent = selectedMacClip || 'None';
+      const cards = macClipGrid.querySelectorAll('.clip-card');
+      cards.forEach((card) => {
+        card.classList.toggle('selected', card.dataset.name === selectedMacClip);
+      });
+    }
+
+    function renderMacClipGrid(clips) {
+      macClipGrid.innerHTML = '';
+      if (!clips.length) {
+        selectedMacClip = '';
+        selectedMacClipLabel.textContent = 'None';
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = 'No clips found in export_clips.';
+        macClipGrid.appendChild(empty);
+        return;
+      }
+
+      clips.forEach((clip) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'clip-card';
+        card.dataset.name = clip.name;
+
+        const thumb = document.createElement('div');
+        thumb.className = 'clip-thumb';
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        video.src = clip.preview_url || clip.url || '';
+        thumb.appendChild(video);
+
+        const meta = document.createElement('div');
+        meta.className = 'clip-meta';
+
+        const name = document.createElement('div');
+        name.className = 'clip-name';
+        name.textContent = clip.name;
+
+        const sub = document.createElement('div');
+        sub.className = 'clip-sub';
+        const mtime = clip.mtime ? new Date(clip.mtime).toLocaleString() : 'Unknown time';
+        sub.textContent = formatClipSize(clip.size) + ' • ' + mtime;
+
+        meta.appendChild(name);
+        meta.appendChild(sub);
+
+        card.appendChild(thumb);
+        card.appendChild(meta);
+
+        card.addEventListener('click', () => setSelectedMacClip(clip.name));
+        macClipGrid.appendChild(card);
+      });
+
+      setSelectedMacClip(clips[0].name);
+    }
 
     loadMacClipsBtn.addEventListener('click', async () => {
       macResult.textContent = 'Loading clips...';
@@ -438,32 +518,18 @@ function renderHome(req, res) {
           return;
         }
 
-        macSelect.innerHTML = '';
         const clips = Array.isArray(d.clips) ? d.clips : [];
-        if (!clips.length) {
-          const opt = document.createElement('option');
-          opt.value = '';
-          opt.textContent = 'No clips found';
-          macSelect.appendChild(opt);
-        } else {
-          clips.forEach((clip) => {
-            const opt = document.createElement('option');
-            opt.value = clip.name;
-            const mb = (Number(clip.size || 0) / (1024 * 1024)).toFixed(2);
-            opt.textContent = clip.name + ' (' + mb + ' MB)';
-            macSelect.appendChild(opt);
-          });
-        }
-        macResult.textContent = JSON.stringify(d, null, 2);
+        renderMacClipGrid(clips);
+        macResult.textContent = JSON.stringify({ ok: true, clip_count: clips.length }, null, 2);
       } catch (err) {
         macResult.textContent = String(err);
       }
     });
 
     publishMacClipBtn.addEventListener('click', async () => {
-      const name = macSelect.value;
+      const name = selectedMacClip;
       if (!name) {
-        macResult.textContent = 'Choose a clip first.';
+        macResult.textContent = 'Choose a clip thumbnail first.';
         return;
       }
       macResult.textContent = 'Publishing selected Mac clip...';
@@ -489,6 +555,7 @@ function renderHome(req, res) {
 
   res.status(200).send(html);
 }
+
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'tiktok-review-demo', time: new Date().toISOString() });
@@ -714,42 +781,6 @@ app.post('/publish/mac-clip', async (req, res) => {
         caption,
         source: 'PULL_FROM_URL',
         selected_clip: name,
-        video_url: videoUrl,
-        privacy_level: 'SELF_ONLY'
-      },
-      response_status: out.status,
-      response_payload: out.payload
-    });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
-app.post('/publish/test', async (req, res) => {
-  const t = req.session.tiktok || null;
-  if (!t?.access_token) {
-    return res.status(401).json({ ok: false, error: 'Not connected. Run OAuth first.' });
-  }
-
-  const videoUrl = String(req.body?.video_url || DEMO_VIDEO_URL || '').trim();
-  const caption = String(req.body?.caption || 'Dance Guru API demo post').trim();
-  if (!videoUrl) {
-    return res.status(400).json({ ok: false, error: 'Missing video_url. Provide a public MP4 URL.' });
-  }
-
-  try {
-    const out = await publishVideoInit({
-      accessToken: t.access_token,
-      openId: t.open_id,
-      caption,
-      videoUrl
-    });
-
-    return res.status(out.ok ? 200 : 400).json({
-      ok: out.ok,
-      endpoint: '/v2/post/publish/video/init/',
-      request: {
-        caption,
         video_url: videoUrl,
         privacy_level: 'SELF_ONLY'
       },
