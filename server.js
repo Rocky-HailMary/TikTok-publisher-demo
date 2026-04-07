@@ -533,6 +533,29 @@ function renderHome(req, res) {
       .clip-hashtags {
         -webkit-line-clamp: 3;
       }
+
+      .clip-player-backdrop {
+        padding: 0;
+        background: rgba(0,0,0,0.92);
+      }
+      .clip-player-modal {
+        width: 100vw;
+        height: 100vh;
+        max-width: none;
+        border-radius: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .clip-player-head {
+        padding: 8px 10px;
+      }
+      .clip-player-video {
+        flex: 1;
+        width: 100%;
+        height: auto;
+        aspect-ratio: auto;
+        object-fit: contain;
+      }
     }
   </style>
 </head>
