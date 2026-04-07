@@ -390,13 +390,24 @@ function renderHome(req, res) {
       width: 100%;
       aspect-ratio: 9 / 16;
       background: #000;
+      position: relative;
+      overflow: hidden;
     }
-    .clip-thumb video {
+    .clip-thumb img {
       width: 100%;
       height: 100%;
       display: block;
       object-fit: cover;
       background: #000;
+    }
+    .clip-thumb-fallback {
+      width: 100%;
+      height: 100%;
+      color: #bbb;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .clip-meta {
       padding: 8px 10px 10px;
@@ -412,6 +423,72 @@ function renderHome(req, res) {
       font-size: 11px;
       color: #666;
       line-height: 1.35;
+    }
+    .clip-posting {
+      margin-top: 6px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #2b2b2b;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-height: 44px;
+    }
+    .clip-hashtags {
+      margin-top: 4px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #3556d8;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-height: 30px;
+    }
+    .clip-player-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .clip-player-modal {
+      width: min(92vw, 520px);
+      background: #0f0f10;
+      color: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    }
+    .clip-player-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      background: #16171a;
+    }
+    .clip-player-head a {
+      color: #9ec2ff;
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .clip-player-head button {
+      padding: 6px 10px;
+      border-radius: 6px;
+    }
+    .clip-player-video {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      display: block;
+      background: #000;
     }
   </style>
 </head>
@@ -463,7 +540,7 @@ function renderHome(req, res) {
     </div>
 
     <div id="mac_clip_grid" class="clip-grid"></div>
-    <p class="muted">Click a thumbnail to play/pause preview.</p>
+    <p class="muted">Click a thumbnail image to open smooth player popup. Posting text + hashtags come from each clip's support file.</p>
     <p class="muted">Selected clip: <strong id="selected_mac_clip">None</strong></p>
 
     <label>Caption:</label>
@@ -482,6 +559,19 @@ function renderHome(req, res) {
       <li>Upload from device and show API response payload.</li>
       <li>Load Mac mini clips as thumbnails, select one, and publish.</li>
     </ul>
+  </div>
+
+  <div id="clipPlayerModal" class="clip-player-backdrop" hidden>
+    <div class="clip-player-modal">
+      <div class="clip-player-head">
+        <strong id="clipPlayerTitle">Clip Preview</strong>
+        <div>
+          <a id="clipPlayerOpenLink" href="#" target="_blank" rel="noopener noreferrer">Open raw video</a>
+          <button id="clipPlayerCloseBtn" type="button">Close</button>
+        </div>
+      </div>
+      <video id="clipPlayerVideo" class="clip-player-video" controls playsinline preload="metadata"></video>
+    </div>
   </div>
 
   <script>
@@ -519,6 +609,13 @@ function renderHome(req, res) {
     const macResult = document.getElementById('macResult');
     const macClipGrid = document.getElementById('mac_clip_grid');
     const selectedMacClipLabel = document.getElementById('selected_mac_clip');
+    const macCaptionInput = document.getElementById('mac_caption');
+
+    const clipPlayerModal = document.getElementById('clipPlayerModal');
+    const clipPlayerVideo = document.getElementById('clipPlayerVideo');
+    const clipPlayerTitle = document.getElementById('clipPlayerTitle');
+    const clipPlayerOpenLink = document.getElementById('clipPlayerOpenLink');
+    const clipPlayerCloseBtn = document.getElementById('clipPlayerCloseBtn');
 
     let selectedMacClip = '';
     let currentMacClips = [];
@@ -528,26 +625,13 @@ function renderHome(req, res) {
       return mb.toFixed(2) + ' MB';
     }
 
-    function stopAllClipPreviews(exceptName = '') {
-      const videos = macClipGrid.querySelectorAll('.clip-card video');
-      videos.forEach((video) => {
-        const card = video.closest('.clip-card');
-        if (!card || card.dataset.name === exceptName) return;
-        video.pause();
-        video.currentTime = 0;
-      });
-    }
+    function buildSuggestedCaption(clip) {
+      const text = String(clip?.posting?.text || '').trim();
+      const hashtags = Array.isArray(clip?.posting?.hashtags) ? clip.posting.hashtags : [];
+      const tagText = hashtags.join(' ').trim();
+      return [text, tagText].filter(Boolean).join('
 
-    function toggleClipPreview(card) {
-      const video = card.querySelector('video');
-      if (!video) return;
-      const clipName = card.dataset.name || '';
-      if (video.paused) {
-        stopAllClipPreviews(clipName);
-        video.play().catch(() => {});
-      } else {
-        video.pause();
-      }
+').trim();
     }
 
     function getCheckedMacClips() {
@@ -557,6 +641,10 @@ function renderHome(req, res) {
         .filter(Boolean);
     }
 
+    function findClipByName(name) {
+      return currentMacClips.find((clip) => clip.name === name) || null;
+    }
+
     function setSelectedMacClip(name) {
       selectedMacClip = name || '';
       selectedMacClipLabel.textContent = selectedMacClip || 'None';
@@ -564,7 +652,38 @@ function renderHome(req, res) {
       cards.forEach((card) => {
         card.classList.toggle('selected', card.dataset.name === selectedMacClip);
       });
+
+      const selectedClip = findClipByName(selectedMacClip);
+      if (selectedClip) {
+        const suggested = buildSuggestedCaption(selectedClip);
+        if (suggested && (!macCaptionInput.value.trim() || macCaptionInput.value.includes('Dance Guru TikTok API demo post'))) {
+          macCaptionInput.value = suggested;
+        }
+      }
     }
+
+    function openClipPlayer(clip) {
+      if (!clip || !clip.url) return;
+      clipPlayerTitle.textContent = clip.name || 'Clip Preview';
+      clipPlayerOpenLink.href = clip.url;
+      clipPlayerVideo.src = clip.url;
+      clipPlayerModal.hidden = false;
+      requestAnimationFrame(() => {
+        clipPlayerVideo.play().catch(() => {});
+      });
+    }
+
+    function closeClipPlayer() {
+      clipPlayerVideo.pause();
+      clipPlayerVideo.removeAttribute('src');
+      clipPlayerVideo.load();
+      clipPlayerModal.hidden = true;
+    }
+
+    clipPlayerCloseBtn.addEventListener('click', closeClipPlayer);
+    clipPlayerModal.addEventListener('click', (event) => {
+      if (event.target === clipPlayerModal) closeClipPlayer();
+    });
 
     function renderMacClipGrid(clips) {
       currentMacClips = Array.isArray(clips) ? clips : [];
@@ -596,13 +715,25 @@ function renderHome(req, res) {
 
         const thumb = document.createElement('div');
         thumb.className = 'clip-thumb';
-        const video = document.createElement('video');
-        video.preload = 'metadata';
-        video.muted = true;
-        video.loop = true;
-        video.playsInline = true;
-        video.src = clip.preview_url || clip.url || '';
-        thumb.appendChild(video);
+        if (clip.thumb_url) {
+          const img = document.createElement('img');
+          img.loading = 'lazy';
+          img.decoding = 'async';
+          img.src = clip.thumb_url;
+          img.alt = clip.name;
+          thumb.appendChild(img);
+        } else {
+          const fallback = document.createElement('div');
+          fallback.className = 'clip-thumb-fallback';
+          fallback.textContent = 'No thumbnail';
+          thumb.appendChild(fallback);
+        }
+
+        thumb.addEventListener('click', (event) => {
+          event.stopPropagation();
+          setSelectedMacClip(clip.name);
+          openClipPlayer(clip);
+        });
 
         const meta = document.createElement('div');
         meta.className = 'clip-meta';
@@ -616,8 +747,19 @@ function renderHome(req, res) {
         const mtime = clip.mtime ? new Date(clip.mtime).toLocaleString() : 'Unknown time';
         sub.textContent = formatClipSize(clip.size) + ' • ' + mtime;
 
+        const postingText = document.createElement('div');
+        postingText.className = 'clip-posting';
+        postingText.textContent = String(clip?.posting?.text || '').trim() || 'No posting text found in support file.';
+
+        const hashtags = document.createElement('div');
+        hashtags.className = 'clip-hashtags';
+        const tags = Array.isArray(clip?.posting?.hashtags) ? clip.posting.hashtags : [];
+        hashtags.textContent = tags.length ? tags.join(' ') : 'No hashtags found.';
+
         meta.appendChild(name);
         meta.appendChild(sub);
+        meta.appendChild(postingText);
+        meta.appendChild(hashtags);
 
         card.appendChild(checkWrap);
         card.appendChild(thumb);
@@ -625,7 +767,6 @@ function renderHome(req, res) {
 
         card.addEventListener('click', () => {
           setSelectedMacClip(clip.name);
-          toggleClipPreview(card);
         });
         macClipGrid.appendChild(card);
       });
@@ -634,7 +775,9 @@ function renderHome(req, res) {
     }
 
     async function loadMacClips() {
-      macResult.textContent = 'Loading clips...';
+      macResult.textContent = 'Loading clips + support metadata...';
+      loadMacClipsBtn.disabled = true;
+      deleteMacClipsBtn.disabled = true;
       try {
         const r = await fetch('/mac/clips');
         const d = await r.json();
@@ -645,9 +788,13 @@ function renderHome(req, res) {
 
         const clips = Array.isArray(d.clips) ? d.clips : [];
         renderMacClipGrid(clips);
-        macResult.textContent = JSON.stringify({ ok: true, clip_count: clips.length }, null, 2);
+        const withPosting = clips.filter((c) => String(c?.posting?.text || '').trim() || (Array.isArray(c?.posting?.hashtags) && c.posting.hashtags.length)).length;
+        macResult.textContent = JSON.stringify({ ok: true, clip_count: clips.length, with_posting_support: withPosting }, null, 2);
       } catch (err) {
         macResult.textContent = String(err);
+      } finally {
+        loadMacClipsBtn.disabled = false;
+        deleteMacClipsBtn.disabled = false;
       }
     }
 
@@ -660,10 +807,10 @@ function renderHome(req, res) {
         return;
       }
 
-      const confirmed = window.confirm('Delete ' + names.length + ' selected clip(s) from Mac mini export_clips?');
+      const confirmed = window.confirm('Delete ' + names.length + ' selected clip(s), plus related support files (.posting.json/.meta.json/.thumb.*)?');
       if (!confirmed) return;
 
-      macResult.textContent = 'Deleting selected clips...';
+      macResult.textContent = 'Deleting selected clips + support files...';
       try {
         const r = await fetch('/mac/clips/delete', {
           method: 'POST',

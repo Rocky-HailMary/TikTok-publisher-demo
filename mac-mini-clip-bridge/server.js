@@ -15,21 +15,38 @@ const {
 const app = express();
 app.use(express.json());
 const clipsRoot = path.resolve(EXPORT_CLIPS_DIR);
-const allowedExt = new Set(['.mp4', '.mov']);
+const allowedClipExt = new Set(['.mp4', '.mov']);
 
-function isAllowedExt(name) {
-  return allowedExt.has(path.extname(name).toLowerCase());
+function isAllowedClipExt(name) {
+  return allowedClipExt.has(path.extname(name).toLowerCase());
+}
+
+function getSafeClipName(name) {
+  const basename = path.basename(String(name || ''));
+  if (!basename || basename !== String(name || '')) return null;
+  if (!isAllowedClipExt(basename)) return null;
+  return basename;
 }
 
 function getSafeClipPath(name) {
-  const basename = path.basename(name || '');
-  if (!basename || basename !== name) return null;
-  if (!isAllowedExt(basename)) return null;
+  const safeName = getSafeClipName(name);
+  if (!safeName) return null;
 
-  const fullPath = path.resolve(clipsRoot, basename);
+  const fullPath = path.resolve(clipsRoot, safeName);
   const rel = path.relative(clipsRoot, fullPath);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
   return fullPath;
+}
+
+function buildPublicUrl(pathname) {
+  return new URL(pathname, BRIDGE_BASE_URL || `http://localhost:${PORT}`).toString();
+}
+
+function withFileToken(url) {
+  if (!BRIDGE_FILE_TOKEN) return url;
+  const u = new URL(url);
+  u.searchParams.set('token', BRIDGE_FILE_TOKEN);
+  return u.toString();
 }
 
 function requireBridgeToken(req, res, next) {
@@ -56,11 +73,125 @@ function requireFileTokenIfEnabled(req, res, next) {
   return next();
 }
 
+async function fileExists(fullPath) {
+  try {
+    const stat = await fsp.stat(fullPath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function firstNonEmptyString(values) {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeHashtags(values) {
+  if (!Array.isArray(values)) return [];
+  const out = [];
+  for (const v of values) {
+    const tag = String(v || '').trim();
+    if (!tag) continue;
+    out.push(tag.startsWith('#') ? tag : `#${tag}`);
+  }
+  return [...new Set(out)];
+}
+
+async function readPostingInfoForClip(clipName) {
+  const postingFileName = `${clipName}.posting.json`;
+  const postingPath = path.join(clipsRoot, postingFileName);
+  if (!(await fileExists(postingPath))) return null;
+
+  try {
+    const raw = await fsp.readFile(postingPath, 'utf8');
+    const payload = JSON.parse(raw);
+    const postingTikTok = payload?.posting?.platforms?.tiktok || {};
+    const creativeTikTok = payload?.creative?.base_platform_copy?.tiktok || {};
+
+    const text = firstNonEmptyString([
+      postingTikTok.caption,
+      postingTikTok.description,
+      postingTikTok.base_copy_ref?.caption,
+      postingTikTok.base_copy_ref?.description,
+      creativeTikTok.caption,
+      creativeTikTok.description,
+      payload?.creative?.hook_text
+    ]);
+
+    const hashtags = normalizeHashtags(
+      postingTikTok.hashtags
+      || postingTikTok.base_copy_ref?.hashtags
+      || creativeTikTok.hashtags
+      || []
+    );
+
+    return {
+      text: text || null,
+      hashtags,
+      file: postingFileName
+    };
+  } catch {
+    return {
+      text: null,
+      hashtags: [],
+      file: postingFileName,
+      parse_error: true
+    };
+  }
+}
+
+async function buildClipRecord(name) {
+  const full = path.join(clipsRoot, name);
+  let stat;
+  try {
+    stat = await fsp.stat(full);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+
+  const clipUrl = withFileToken(buildPublicUrl(`/clips/${encodeURIComponent(name)}`));
+
+  const thumbCandidates = [
+    `${name}.thumb.jpg`,
+    `${name}.thumb.jpeg`,
+    `${name}.thumb.png`
+  ];
+
+  let thumbName = null;
+  for (const candidate of thumbCandidates) {
+    if (await fileExists(path.join(clipsRoot, candidate))) {
+      thumbName = candidate;
+      break;
+    }
+  }
+
+  const postingInfo = await readPostingInfoForClip(name);
+
+  return {
+    name,
+    size: stat.size,
+    mtime: stat.mtime.toISOString(),
+    url: clipUrl,
+    thumb_url: thumbName ? withFileToken(buildPublicUrl(`/support/${encodeURIComponent(thumbName)}`)) : null,
+    posting: postingInfo,
+    support_files: {
+      posting_json: postingInfo?.file || null,
+      meta_json: (await fileExists(path.join(clipsRoot, `${name}.meta.json`))) ? `${name}.meta.json` : null,
+      thumbnail: thumbName
+    }
+  };
+}
+
 app.get('/health', async (_req, res) => {
   let clipCount = 0;
   try {
     const names = await fsp.readdir(clipsRoot);
-    clipCount = names.filter((n) => isAllowedExt(n)).length;
+    clipCount = names.filter((n) => isAllowedClipExt(n)).length;
   } catch {
     // ignore
   }
@@ -78,34 +209,11 @@ app.get('/health', async (_req, res) => {
 app.get('/clips', requireBridgeToken, async (_req, res) => {
   try {
     const names = await fsp.readdir(clipsRoot);
-    const clips = [];
+    const clipNames = names.filter((n) => isAllowedClipExt(n));
+    const records = await Promise.all(clipNames.map((name) => buildClipRecord(name)));
+    const clips = records.filter(Boolean).sort((a, b) => (new Date(b.mtime).getTime() - new Date(a.mtime).getTime()));
 
-    for (const name of names) {
-      if (!isAllowedExt(name)) continue;
-      const full = path.join(clipsRoot, name);
-      let stat;
-      try {
-        stat = await fsp.stat(full);
-      } catch {
-        continue;
-      }
-      if (!stat.isFile()) continue;
-
-      const clipUrl = new URL(`/clips/${encodeURIComponent(name)}`, BRIDGE_BASE_URL || `http://localhost:${PORT}`).toString();
-      clips.push({
-        name,
-        size: stat.size,
-        mtime: stat.mtime.toISOString(),
-        url: BRIDGE_FILE_TOKEN ? `${clipUrl}?token=${encodeURIComponent(BRIDGE_FILE_TOKEN)}` : clipUrl
-      });
-    }
-
-    clips.sort((a, b) => (new Date(b.mtime).getTime() - new Date(a.mtime).getTime()));
-
-    return res.json({
-      ok: true,
-      clips
-    });
+    return res.json({ ok: true, clips });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
@@ -120,30 +228,58 @@ app.post('/clips/delete', requireBridgeToken, async (req, res) => {
   }
 
   const deleted = [];
+  const deletedSupportFiles = [];
   const missing = [];
   const invalid = [];
   const errors = [];
 
+  const supportSuffixes = [
+    '.posting.json',
+    '.meta.json',
+    '.thumb.jpg',
+    '.thumb.jpeg',
+    '.thumb.png',
+    '.caption.txt',
+    '.caption.json'
+  ];
+
   for (const name of names) {
-    const fullPath = getSafeClipPath(name);
-    if (!fullPath) {
+    const safeName = getSafeClipName(name);
+    if (!safeName) {
       invalid.push(name);
       continue;
     }
 
+    const videoPath = path.join(clipsRoot, safeName);
+
     try {
-      const stat = await fsp.stat(fullPath);
-      if (!stat.isFile()) {
-        missing.push(name);
-        continue;
+      const stat = await fsp.stat(videoPath);
+      if (stat.isFile()) {
+        await fsp.unlink(videoPath);
+        deleted.push(safeName);
+      } else {
+        missing.push(safeName);
       }
-      await fsp.unlink(fullPath);
-      deleted.push(name);
     } catch (e) {
       if (e && e.code === 'ENOENT') {
-        missing.push(name);
+        missing.push(safeName);
       } else {
-        errors.push({ name, error: String(e.message || e) });
+        errors.push({ name: safeName, error: String(e.message || e) });
+      }
+    }
+
+    for (const suffix of supportSuffixes) {
+      const supportName = `${safeName}${suffix}`;
+      const supportPath = path.join(clipsRoot, supportName);
+      try {
+        const st = await fsp.stat(supportPath);
+        if (!st.isFile()) continue;
+        await fsp.unlink(supportPath);
+        deletedSupportFiles.push(supportName);
+      } catch (e) {
+        if (!(e && e.code === 'ENOENT')) {
+          errors.push({ name: supportName, error: String(e.message || e) });
+        }
       }
     }
   }
@@ -152,10 +288,45 @@ app.post('/clips/delete', requireBridgeToken, async (req, res) => {
     ok: errors.length === 0,
     requested: names,
     deleted,
+    deleted_support_files: deletedSupportFiles,
     missing,
     invalid,
     errors
   });
+});
+
+app.get('/support/:name', requireFileTokenIfEnabled, async (req, res) => {
+  const safeName = path.basename(String(req.params.name || ''));
+  if (!safeName || safeName !== String(req.params.name || '')) {
+    return res.status(400).json({ ok: false, error: 'Invalid support filename' });
+  }
+
+  const allowedSupportSuffixes = ['.thumb.jpg', '.thumb.jpeg', '.thumb.png'];
+  if (!allowedSupportSuffixes.some((suffix) => safeName.endsWith(suffix))) {
+    return res.status(400).json({ ok: false, error: 'Unsupported support file type' });
+  }
+
+  const fullPath = path.resolve(clipsRoot, safeName);
+  const rel = path.relative(clipsRoot, fullPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return res.status(400).json({ ok: false, error: 'Invalid support file path' });
+  }
+
+  try {
+    const stat = await fsp.stat(fullPath);
+    if (!stat.isFile()) return res.status(404).json({ ok: false, error: 'Not found' });
+
+    const ext = path.extname(safeName).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : (ext === '.jpeg' || ext === '.jpg' ? 'image/jpeg' : 'application/octet-stream');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('Cache-Control', 'public, max-age=600');
+
+    return fs.createReadStream(fullPath).pipe(res);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return res.status(404).json({ ok: false, error: 'Not found' });
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
 });
 
 app.get('/clips/:name', requireFileTokenIfEnabled, async (req, res) => {
@@ -171,20 +342,36 @@ app.get('/clips/:name', requireFileTokenIfEnabled, async (req, res) => {
 
     const ext = path.extname(name).toLowerCase();
     const mime = ext === '.mov' ? 'video/quicktime' : 'video/mp4';
+    const fileSize = stat.size;
+
     res.setHeader('Content-Type', mime);
-    res.setHeader('Content-Length', String(stat.size));
     res.setHeader('Cache-Control', 'public, max-age=120');
     res.setHeader('Accept-Ranges', 'bytes');
 
-    const stream = fs.createReadStream(fullPath);
-    stream.on('error', () => {
-      if (!res.headersSent) {
-        res.status(500).json({ ok: false, error: 'Failed to stream clip' });
-      } else {
-        res.destroy();
+    const range = String(req.headers.range || '').trim();
+    if (range) {
+      const match = range.match(/bytes=(\d*)-(\d*)/i);
+      if (!match) {
+        res.setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.status(416).end();
       }
-    });
-    return stream.pipe(res);
+
+      let start = match[1] ? Number(match[1]) : 0;
+      let end = match[2] ? Number(match[2]) : fileSize - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= fileSize) {
+        res.setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.status(416).end();
+      }
+      end = Math.min(end, fileSize - 1);
+
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', String((end - start) + 1));
+      return fs.createReadStream(fullPath, { start, end }).pipe(res);
+    }
+
+    res.setHeader('Content-Length', String(fileSize));
+    return fs.createReadStream(fullPath).pipe(res);
   } catch (e) {
     if (e && e.code === 'ENOENT') return res.status(404).json({ ok: false, error: 'Not found' });
     return res.status(500).json({ ok: false, error: String(e.message || e) });
