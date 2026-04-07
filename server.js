@@ -393,7 +393,8 @@ function renderHome(req, res) {
       position: relative;
       overflow: hidden;
     }
-    .clip-thumb img {
+    .clip-thumb img,
+    .clip-thumb video {
       width: 100%;
       height: 100%;
       display: block;
@@ -493,6 +494,24 @@ function renderHome(req, res) {
       display: block;
       background: #000;
     }
+    .clip-player-float-close {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 0px) + 10px);
+      right: 10px;
+      z-index: 1002;
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(0,0,0,0.62);
+      color: #fff;
+      font-size: 24px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
     @media (max-width: 760px) {
       body { margin: 14px; }
       .card { padding: 12px; border-radius: 10px; }
@@ -555,6 +574,11 @@ function renderHome(req, res) {
         height: auto;
         aspect-ratio: auto;
         object-fit: contain;
+      }
+      .clip-player-float-close {
+        width: 46px;
+        height: 46px;
+        font-size: 28px;
       }
     }
   </style>
@@ -629,6 +653,7 @@ function renderHome(req, res) {
   </div>
 
   <div id="clipPlayerModal" class="clip-player-backdrop" hidden>
+    <button id="clipPlayerFloatCloseBtn" class="clip-player-float-close" type="button" aria-label="Close preview">×</button>
     <div class="clip-player-modal">
       <div class="clip-player-head">
         <strong id="clipPlayerTitle">Clip Preview</strong>
@@ -683,6 +708,7 @@ function renderHome(req, res) {
     const clipPlayerTitle = document.getElementById('clipPlayerTitle');
     const clipPlayerOpenLink = document.getElementById('clipPlayerOpenLink');
     const clipPlayerCloseBtn = document.getElementById('clipPlayerCloseBtn');
+    const clipPlayerFloatCloseBtn = document.getElementById('clipPlayerFloatCloseBtn');
 
     let selectedMacClip = '';
     let currentMacClips = [];
@@ -746,6 +772,7 @@ function renderHome(req, res) {
     }
 
     clipPlayerCloseBtn.addEventListener('click', closeClipPlayer);
+    clipPlayerFloatCloseBtn.addEventListener('click', closeClipPlayer);
     clipPlayerModal.addEventListener('click', (event) => {
       if (event.target === clipPlayerModal) closeClipPlayer();
     });
@@ -787,6 +814,18 @@ function renderHome(req, res) {
           img.src = clip.thumb_url;
           img.alt = clip.name;
           thumb.appendChild(img);
+        } else if (clip.url) {
+          const previewVideo = document.createElement('video');
+          previewVideo.muted = true;
+          previewVideo.playsInline = true;
+          previewVideo.preload = 'metadata';
+          previewVideo.src = clip.url;
+          previewVideo.addEventListener('loadedmetadata', () => {
+            try {
+              previewVideo.currentTime = Math.min(0.15, Number(previewVideo.duration || 0) / 2 || 0.15);
+            } catch {}
+          });
+          thumb.appendChild(previewVideo);
         } else {
           const fallback = document.createElement('div');
           fallback.className = 'clip-thumb-fallback';
