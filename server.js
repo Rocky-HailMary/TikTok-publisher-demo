@@ -493,6 +493,47 @@ function renderHome(req, res) {
       display: block;
       background: #000;
     }
+    @media (max-width: 760px) {
+      body { margin: 14px; }
+      .card { padding: 12px; border-radius: 10px; }
+      .clip-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .clip-card {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 112px minmax(0, 1fr);
+        align-items: stretch;
+      }
+      .clip-thumb {
+        width: 112px;
+        min-height: 198px;
+        aspect-ratio: auto;
+      }
+      .clip-meta {
+        padding: 8px;
+      }
+      .clip-name {
+        font-size: 13px;
+      }
+      .clip-sub,
+      .clip-posting,
+      .clip-hashtags {
+        font-size: 12px;
+      }
+      .clip-posting,
+      .clip-hashtags {
+        min-height: 0;
+      }
+      .clip-posting {
+        -webkit-line-clamp: 4;
+      }
+      .clip-hashtags {
+        -webkit-line-clamp: 3;
+      }
+    }
   </style>
 </head>
 <body>
