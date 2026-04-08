@@ -707,9 +707,7 @@ function renderHome(req, res) {
     <div id="mac_clip_grid" class="clip-grid"></div>
     <p class="muted">Click a thumbnail image to open smooth player popup. Posting text + hashtags come from each clip's support file.</p>
     <p class="muted">Selected clip: <strong id="selected_mac_clip">None</strong></p>
-
-    <label>Caption:</label>
-    <textarea id="mac_caption" rows="3">Dance Guru TikTok API demo post</textarea>
+    <p class="muted">Publish uses caption/hashtags from the selected clip support file.</p>
 
     <button id="publishMacClipBtn" type="button">Publish Selected Mac Clip</button>
     <pre id="macResult">No Mac mini publish attempt yet.</pre>
@@ -775,7 +773,6 @@ function renderHome(req, res) {
     const macResult = document.getElementById('macResult');
     const macClipGrid = document.getElementById('mac_clip_grid');
     const selectedMacClipLabel = document.getElementById('selected_mac_clip');
-    const macCaptionInput = document.getElementById('mac_caption');
 
     const clipPlayerModal = document.getElementById('clipPlayerModal');
     const clipPlayerVideo = document.getElementById('clipPlayerVideo');
@@ -818,13 +815,6 @@ function renderHome(req, res) {
         card.classList.toggle('selected', card.dataset.name === selectedMacClip);
       });
 
-      const selectedClip = findClipByName(selectedMacClip);
-      if (selectedClip) {
-        const suggested = buildSuggestedCaption(selectedClip);
-        if (suggested && (!macCaptionInput.value.trim() || macCaptionInput.value.includes('Dance Guru TikTok API demo post'))) {
-          macCaptionInput.value = suggested;
-        }
-      }
     }
 
     function openClipPlayer(clip) {
@@ -1013,7 +1003,10 @@ function renderHome(req, res) {
         macResult.textContent = 'Choose a clip thumbnail first.';
         return;
       }
-      macResult.textContent = 'Publishing selected Mac clip...';
+
+      const selectedClip = findClipByName(name);
+      const caption = buildSuggestedCaption(selectedClip) || 'Dance Guru TikTok API demo post';
+      macResult.textContent = 'Publishing selected Mac clip with support-file caption...';
 
       try {
         const r = await fetch('/publish/mac-clip', {
@@ -1021,7 +1014,7 @@ function renderHome(req, res) {
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             name,
-            caption: document.getElementById('mac_caption').value
+            caption
           })
         });
         const d = await r.json();
