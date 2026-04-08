@@ -31,8 +31,8 @@ const {
   MAC_BRIDGE_TOKEN = '',
   MAC_BRIDGE_FILE_TOKEN = '',
   APPROVED_TIKTOK_OPEN_IDS = '',
-  BASIC_AUTH_USER = '',
-  BASIC_AUTH_PASS = ''
+  SITE_LOGIN_USER = '',
+  SITE_LOGIN_PASS = ''
 } = process.env;
 
 const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
@@ -168,7 +168,7 @@ function secureEquals(a, b) {
 }
 
 function requireBasicAuth(req, res, next) {
-  if (!BASIC_AUTH_USER || !BASIC_AUTH_PASS) return next();
+  if (!SITE_LOGIN_USER || !SITE_LOGIN_PASS) return next();
   if (req.path === '/health') return next();
 
   const auth = String(req.headers.authorization || '');
@@ -188,7 +188,7 @@ function requireBasicAuth(req, res, next) {
   const user = idx >= 0 ? decoded.slice(0, idx) : '';
   const pass = idx >= 0 ? decoded.slice(idx + 1) : '';
 
-  const ok = secureEquals(user, BASIC_AUTH_USER) && secureEquals(pass, BASIC_AUTH_PASS);
+  const ok = secureEquals(user, SITE_LOGIN_USER) && secureEquals(pass, SITE_LOGIN_PASS);
   if (!ok) {
     res.setHeader('WWW-Authenticate', 'Basic realm="api.hypercreative.games", charset="UTF-8"');
     return res.status(401).send('Invalid credentials');
@@ -1225,6 +1225,7 @@ app.get('/api/status', (req, res) => {
   const approved = Boolean(t?.open_id && isApprovedTikTokOpenId(t.open_id));
   res.json({
     ok: true,
+    site_login_enabled: Boolean(SITE_LOGIN_USER && SITE_LOGIN_PASS),
     connected: Boolean(t?.access_token),
     approved,
     approved_open_ids_count: approvedOpenIds.size,
