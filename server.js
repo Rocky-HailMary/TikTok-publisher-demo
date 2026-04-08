@@ -709,7 +709,7 @@ function renderHome(req, res) {
     <p class="muted">Selected clip: <strong id="selected_mac_clip">None</strong></p>
     <p class="muted">Publish uses caption/hashtags from the selected clip support file.</p>
 
-    <button id="publishMacClipBtn" type="button">Publish Selected Mac Clip</button>
+    <button id="publishMacClipBtn" type="button" disabled>Publish Selected Mac Clip</button>
     <pre id="macResult">No Mac mini publish attempt yet.</pre>
   </div>
 
@@ -807,6 +807,10 @@ function renderHome(req, res) {
       return currentMacClips.find((clip) => clip.name === name) || null;
     }
 
+    function updatePublishButtonState() {
+      publishMacClipBtn.disabled = !selectedMacClip;
+    }
+
     function setSelectedMacClip(name) {
       selectedMacClip = name || '';
       selectedMacClipLabel.textContent = selectedMacClip || 'None';
@@ -814,7 +818,7 @@ function renderHome(req, res) {
       cards.forEach((card) => {
         card.classList.toggle('selected', card.dataset.name === selectedMacClip);
       });
-
+      updatePublishButtonState();
     }
 
     function openClipPlayer(clip) {
@@ -847,6 +851,7 @@ function renderHome(req, res) {
       if (!currentMacClips.length) {
         selectedMacClip = '';
         selectedMacClipLabel.textContent = 'None';
+        updatePublishButtonState();
         const empty = document.createElement('p');
         empty.className = 'muted';
         empty.textContent = 'No clips found in export_clips.';
@@ -1018,7 +1023,12 @@ function renderHome(req, res) {
           })
         });
         const d = await r.json();
-        macResult.textContent = JSON.stringify(d, null, 2);
+        const publishId = d?.response_payload?.data?.publish_id;
+        if (r.ok && d?.ok && publishId) {
+          macResult.textContent = '✅ Publish started successfully.\nPublish ID: ' + publishId + '\n\n' + JSON.stringify(d, null, 2);
+        } else {
+          macResult.textContent = JSON.stringify(d, null, 2);
+        }
       } catch (err) {
         macResult.textContent = String(err);
       }
