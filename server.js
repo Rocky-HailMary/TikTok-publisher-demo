@@ -30,7 +30,9 @@ const {
   MAC_BRIDGE_BASE_URL = '',
   MAC_BRIDGE_TOKEN = '',
   MAC_BRIDGE_FILE_TOKEN = '',
-  APPROVED_TIKTOK_OPEN_IDS = ''
+  APPROVED_TIKTOK_OPEN_IDS = '',
+  BASIC_AUTH_USER = '',
+  BASIC_AUTH_PASS = ''
 } = process.env;
 
 const allowedOrigins = ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
@@ -157,6 +159,45 @@ async function cleanupUploadCache() {
 
 setInterval(cleanupUploadCache, 15 * 60 * 1000).unref();
 setInterval(cleanupOAuthStateStore, 2 * 60 * 1000).unref();
+
+function secureEquals(a, b) {
+  const aBuf = Buffer.from(String(a || ''), 'utf8');
+  const bBuf = Buffer.from(String(b || ''), 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function requireBasicAuth(req, res, next) {
+  if (!BASIC_AUTH_USER || !BASIC_AUTH_PASS) return next();
+  if (req.path === '/health') return next();
+
+  const auth = String(req.headers.authorization || '');
+  if (!auth.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="api.hypercreative.games", charset="UTF-8"');
+    return res.status(401).send('Authentication required');
+  }
+
+  let decoded = '';
+  try {
+    decoded = Buffer.from(auth.slice(6).trim(), 'base64').toString('utf8');
+  } catch {
+    decoded = '';
+  }
+
+  const idx = decoded.indexOf(':');
+  const user = idx >= 0 ? decoded.slice(0, idx) : '';
+  const pass = idx >= 0 ? decoded.slice(idx + 1) : '';
+
+  const ok = secureEquals(user, BASIC_AUTH_USER) && secureEquals(pass, BASIC_AUTH_PASS);
+  if (!ok) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="api.hypercreative.games", charset="UTF-8"');
+    return res.status(401).send('Invalid credentials');
+  }
+
+  return next();
+}
+
+app.use(requireBasicAuth);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
