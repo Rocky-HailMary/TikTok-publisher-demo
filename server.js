@@ -170,6 +170,7 @@ function secureEquals(a, b) {
 function requireBasicAuth(req, res, next) {
   if (!SITE_LOGIN_USER || !SITE_LOGIN_PASS) return next();
   if (req.path === '/health') return next();
+  if (req.session?.siteAuthed) return next();
 
   const auth = String(req.headers.authorization || '');
   if (!auth.startsWith('Basic ')) {
@@ -194,10 +195,13 @@ function requireBasicAuth(req, res, next) {
     return res.status(401).send('Invalid credentials');
   }
 
+  if (req.session) {
+    req.session.siteAuthed = true;
+    return req.session.save(() => next());
+  }
+
   return next();
 }
-
-app.use(requireBasicAuth);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -233,6 +237,8 @@ app.use(
     }
   })
 );
+
+app.use(requireBasicAuth);
 
 function mustHaveConfig() {
   const missing = [];
