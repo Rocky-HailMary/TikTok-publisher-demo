@@ -1226,8 +1226,6 @@ app.get('/api/status', (req, res) => {
   res.json({
     ok: true,
     site_login_enabled: Boolean(SITE_LOGIN_USER && SITE_LOGIN_PASS),
-    has_site_login_user: Boolean(SITE_LOGIN_USER),
-    has_site_login_pass: Boolean(SITE_LOGIN_PASS),
     connected: Boolean(t?.access_token),
     approved,
     approved_open_ids_count: approvedOpenIds.size,
