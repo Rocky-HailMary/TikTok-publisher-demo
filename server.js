@@ -958,7 +958,38 @@ function renderHome(req, res) {
                   req.setRequestHeader('Content-Type', 'application/json');
                   req.onreadystatechange = function () {
                     if (req.readyState !== 4) return;
-                    if (pre) pre.textContent = req.responseText || ('HTTP ' + req.status);
+                    if (!pre) return;
+
+                    var raw = req.responseText || ('HTTP ' + req.status);
+                    var out = raw;
+                    try {
+                      var payload = JSON.parse(raw || '{}');
+                      var publishId = payload && payload.response_payload && payload.response_payload.data
+                        ? payload.response_payload.data.publish_id
+                        : '';
+                      var logId = payload && payload.response_payload && payload.response_payload.error
+                        ? payload.response_payload.error.log_id
+                        : '';
+                      var clipName = payload && payload.request ? payload.request.selected_clip : '';
+
+                      if (payload && payload.ok && publishId) {
+                        var lines = [];
+                        lines.push('✅ Publish started successfully');
+                        lines.push('Publish ID: ' + publishId);
+                        if (clipName) lines.push('Clip: ' + clipName);
+                        lines.push('HTTP Status: ' + String(payload.response_status || req.status));
+                        if (logId) lines.push('TikTok log_id: ' + logId);
+                        lines.push('');
+                        lines.push(JSON.stringify(payload, null, 2));
+                        out = lines.join('\n');
+                      } else {
+                        out = JSON.stringify(payload, null, 2);
+                      }
+                    } catch (_e) {
+                      out = raw;
+                    }
+
+                    pre.textContent = out;
                   };
                   req.send(JSON.stringify({ name: selected, caption: caption }));
                   return false;
