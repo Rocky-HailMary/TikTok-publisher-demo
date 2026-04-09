@@ -169,7 +169,17 @@ function secureEquals(a, b) {
 
 function requireBasicAuth(req, res, next) {
   if (!SITE_LOGIN_USER || !SITE_LOGIN_PASS) return next();
-  if (req.path === '/health') return next();
+
+  // Keep the main page behind Basic Auth, but let app JSON/action routes
+  // authenticate via session/TikTok checks so browser fetches don't stall.
+  const authOptionalPath =
+    req.path === '/health' ||
+    req.path === '/api/status' ||
+    req.path.startsWith('/mac/') ||
+    req.path.startsWith('/publish/') ||
+    req.path.startsWith('/uploads/');
+
+  if (authOptionalPath) return next();
   if (req.session?.siteAuthed) return next();
 
   const auth = String(req.headers.authorization || '');
@@ -764,6 +774,7 @@ function renderHome(req, res) {
       try {
         const r = await fetch('/publish/upload', {
           method: 'POST',
+          credentials: 'include',
           body: fd
         });
         const d = await r.json();
@@ -958,10 +969,17 @@ function renderHome(req, res) {
       loadMacClipsBtn.disabled = true;
       deleteMacClipsBtn.disabled = true;
       try {
-        const r = await fetch('/mac/clips');
-        const d = await r.json();
+        const r = await fetch('/mac/clips', { credentials: 'include' });
+        const raw = await r.text();
+        let d = null;
+        try {
+          d = JSON.parse(raw);
+        } catch {
+          d = { ok: false, error: 'Non-JSON response from /mac/clips', raw };
+        }
+
         if (!r.ok || !d.ok) {
-          macResult.textContent = JSON.stringify(d, null, 2);
+          macResult.textContent = JSON.stringify({ http_status: r.status, ...d }, null, 2);
           return;
         }
 
@@ -993,11 +1011,19 @@ function renderHome(req, res) {
       try {
         const r = await fetch('/mac/clips/delete', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ names })
         });
-        const d = await r.json();
-        macResult.textContent = JSON.stringify(d, null, 2);
+        const raw = await r.text();
+        let d = null;
+        try {
+          d = JSON.parse(raw);
+        } catch {
+          d = { ok: false, error: 'Non-JSON response from /mac/clips/delete', raw };
+        }
+
+        macResult.textContent = JSON.stringify({ http_status: r.status, ...d }, null, 2);
 
         if (r.ok && d.ok) {
           await loadMacClips();
@@ -1022,6 +1048,7 @@ function renderHome(req, res) {
       try {
         const r = await fetch('/publish/mac-clip', {
           method: 'POST',
+          credentials: 'include',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             name,
