@@ -813,7 +813,7 @@ function renderHome(req, res) {
 
               html.push('<div class="clip-card" data-name="' + esc(name) + '" style="cursor:pointer;">');
               html.push('  <div class="clip-check-wrap"><input type="checkbox" class="clip-check" data-name="' + esc(name) + '" title="Select for deletion" onclick="event.stopPropagation();" /></div>');
-              html.push('  <div class="clip-thumb" data-url="' + esc(videoUrl) + '">' + thumbInner + '</div>');
+              html.push('  <button type="button" class="clip-thumb" data-url="' + esc(videoUrl) + '" data-name="' + esc(name) + '" title="Preview ' + esc(name) + '" style="border:0; padding:0; background:transparent; cursor:pointer;">' + thumbInner + '</button>');
               html.push('  <div class="clip-meta">');
               html.push('    <div class="clip-name">' + esc(name) + '</div>');
               html.push('    <div class="clip-sub">' + esc(sizeMb.toFixed(2) + ' MB • ' + mtimeText) + '</div>');
@@ -849,10 +849,57 @@ function renderHome(req, res) {
                 setSelected(this.getAttribute('data-name') || '');
               });
             }
+
+            var thumbs = grid.querySelectorAll('.clip-thumb');
+            for (var t = 0; t < thumbs.length; t++) {
+              thumbs[t].addEventListener('click', function (ev) {
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+                var name = String(this.getAttribute('data-name') || '');
+                setSelected(name);
+                var clip = window.__legacyMacClipsByName ? window.__legacyMacClipsByName[name] : null;
+                if (window.__openLegacyPlayer) window.__openLegacyPlayer(clip);
+              });
+            }
+
             if (cards.length) setSelected(cards[0].getAttribute('data-name') || '');
 
             if (!window.__legacyMacFallbackWired) {
               window.__legacyMacFallbackWired = true;
+
+              var modal = document.getElementById('clipPlayerModal');
+              var modalVideo = document.getElementById('clipPlayerVideo');
+              var modalTitle = document.getElementById('clipPlayerTitle');
+              var modalOpenLink = document.getElementById('clipPlayerOpenLink');
+              var modalCloseBtn = document.getElementById('clipPlayerCloseBtn');
+              var modalFloatCloseBtn = document.getElementById('clipPlayerFloatCloseBtn');
+
+              function closeLegacyPlayer() {
+                if (!modal || !modalVideo) return;
+                try { modalVideo.pause(); } catch (_e) {}
+                try { modalVideo.removeAttribute('src'); modalVideo.load(); } catch (_e2) {}
+                modal.hidden = true;
+              }
+
+              function openLegacyPlayer(clip) {
+                if (!modal || !modalVideo || !clip || !clip.url) return;
+                if (modalTitle) modalTitle.textContent = clip.name || 'Clip Preview';
+                if (modalOpenLink) modalOpenLink.href = String(clip.url);
+                modalVideo.src = String(clip.url);
+                modal.hidden = false;
+                setTimeout(function () {
+                  try { modalVideo.play(); } catch (_e) {}
+                }, 0);
+              }
+
+              window.__openLegacyPlayer = openLegacyPlayer;
+
+              if (modalCloseBtn) modalCloseBtn.onclick = closeLegacyPlayer;
+              if (modalFloatCloseBtn) modalFloatCloseBtn.onclick = closeLegacyPlayer;
+              if (modal) {
+                modal.onclick = function (ev) {
+                  if (ev && ev.target === modal) closeLegacyPlayer();
+                };
+              }
 
               var deleteBtn = document.getElementById('deleteMacClipsBtn');
               if (deleteBtn) {
