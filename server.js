@@ -789,16 +789,130 @@ function renderHome(req, res) {
             if (!grid) return;
             if (!payload || !payload.ok || !payload.clips || !payload.clips.length) return;
 
-            var html = ['<ul class="muted" style="margin:0; padding-left:18px;">'];
+            function esc(s) {
+              return String(s || '').replace(/[&<>\"']/g, function (ch) {
+                if (ch === '&') return '&amp;';
+                if (ch === '<') return '&lt;';
+                if (ch === '>') return '&gt;';
+                if (ch === '"') return '&quot;';
+                return '&#39;';
+              });
+            }
+
+            var html = [];
             for (var i = 0; i < payload.clips.length; i++) {
               var c = payload.clips[i] || {};
               var name = String(c.name || 'unnamed');
-              html.push('<li>' + name.replace(/[&<>]/g, function (ch) {
-                return ch === '&' ? '&amp;' : (ch === '<' ? '&lt;' : '&gt;');
-              }) + '</li>');
+              var thumbUrl = c.thumb_url ? String(c.thumb_url) : '';
+              var videoUrl = c.url ? String(c.url) : '';
+              var thumbInner = thumbUrl
+                ? ('<img loading="lazy" decoding="async" src="' + esc(thumbUrl) + '" alt="' + esc(name) + '" />')
+                : '<div class="clip-thumb-fallback">No thumbnail</div>';
+              var sizeMb = Number(c.size || 0) / (1024 * 1024);
+              var mtimeText = c.mtime ? new Date(c.mtime).toLocaleString() : 'Unknown time';
+
+              html.push('<div class="clip-card" data-name="' + esc(name) + '" style="cursor:pointer;">');
+              html.push('  <div class="clip-check-wrap"><input type="checkbox" class="clip-check" data-name="' + esc(name) + '" title="Select for deletion" onclick="event.stopPropagation();" /></div>');
+              html.push('  <div class="clip-thumb" data-url="' + esc(videoUrl) + '">' + thumbInner + '</div>');
+              html.push('  <div class="clip-meta">');
+              html.push('    <div class="clip-name">' + esc(name) + '</div>');
+              html.push('    <div class="clip-sub">' + esc(sizeMb.toFixed(2) + ' MB • ' + mtimeText) + '</div>');
+              html.push('  </div>');
+              html.push('</div>');
             }
-            html.push('</ul>');
             grid.innerHTML = html.join('');
+
+            var selectedLabel = document.getElementById('selected_mac_clip');
+            var publishBtn = document.getElementById('publishMacClipBtn');
+            var selectedName = '';
+
+            function setSelected(name) {
+              selectedName = String(name || '');
+              if (selectedLabel) selectedLabel.textContent = selectedName || 'None';
+              if (publishBtn) publishBtn.disabled = !selectedName;
+              var cards = grid.querySelectorAll('.clip-card');
+              for (var j = 0; j < cards.length; j++) {
+                if (cards[j].getAttribute('data-name') === selectedName) cards[j].classList.add('selected');
+                else cards[j].classList.remove('selected');
+              }
+            }
+
+            window.__legacyMacClipsByName = {};
+            for (var m = 0; m < payload.clips.length; m++) {
+              var clipItem = payload.clips[m] || {};
+              window.__legacyMacClipsByName[String(clipItem.name || '')] = clipItem;
+            }
+
+            var cards = grid.querySelectorAll('.clip-card');
+            for (var k = 0; k < cards.length; k++) {
+              cards[k].addEventListener('click', function () {
+                setSelected(this.getAttribute('data-name') || '');
+              });
+            }
+            if (cards.length) setSelected(cards[0].getAttribute('data-name') || '');
+
+            if (!window.__legacyMacFallbackWired) {
+              window.__legacyMacFallbackWired = true;
+
+              var deleteBtn = document.getElementById('deleteMacClipsBtn');
+              if (deleteBtn) {
+                deleteBtn.onclick = function () {
+                  var checks = grid.querySelectorAll('.clip-check:checked');
+                  var names = [];
+                  for (var x = 0; x < checks.length; x++) {
+                    names.push(String(checks[x].getAttribute('data-name') || ''));
+                  }
+                  if (!names.length) {
+                    if (pre) pre.textContent = 'Check one or more clip boxes first.';
+                    return false;
+                  }
+
+                  var ok = window.confirm('Delete ' + names.length + ' selected clip(s)?');
+                  if (!ok) return false;
+
+                  var req = new XMLHttpRequest();
+                  req.open('POST', '/mac/clips/delete', true);
+                  req.withCredentials = true;
+                  req.setRequestHeader('Content-Type', 'application/json');
+                  req.onreadystatechange = function () {
+                    if (req.readyState !== 4) return;
+                    if (pre) pre.textContent = req.responseText || ('HTTP ' + req.status);
+                    if (req.status >= 200 && req.status < 300) {
+                      loadMacClipsFallback();
+                    }
+                  };
+                  req.send(JSON.stringify({ names: names }));
+                  return false;
+                };
+              }
+
+              if (publishBtn) {
+                publishBtn.onclick = function () {
+                  var selected = selectedLabel ? String(selectedLabel.textContent || '').trim() : '';
+                  if (!selected || selected === 'None') {
+                    if (pre) pre.textContent = 'Choose a clip thumbnail first.';
+                    return false;
+                  }
+
+                  var clip = window.__legacyMacClipsByName ? window.__legacyMacClipsByName[selected] : null;
+                  var posting = clip && clip.posting ? clip.posting : null;
+                  var text = posting && posting.text ? String(posting.text).trim() : '';
+                  var tags = posting && Array.isArray(posting.hashtags) ? posting.hashtags.join(' ') : '';
+                  var caption = (text + (text && tags ? '\\n\\n' : '') + tags).trim() || 'Dance Guru TikTok API demo post';
+
+                  var req = new XMLHttpRequest();
+                  req.open('POST', '/publish/mac-clip', true);
+                  req.withCredentials = true;
+                  req.setRequestHeader('Content-Type', 'application/json');
+                  req.onreadystatechange = function () {
+                    if (req.readyState !== 4) return;
+                    if (pre) pre.textContent = req.responseText || ('HTTP ' + req.status);
+                  };
+                  req.send(JSON.stringify({ name: selected, caption: caption }));
+                  return false;
+                };
+              }
+            }
           } catch (_err) {
             // keep raw JSON in <pre>
           }
