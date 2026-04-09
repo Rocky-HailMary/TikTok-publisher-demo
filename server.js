@@ -988,7 +988,10 @@ function renderHome(req, res) {
         }
 
         if (!r.ok || !d.ok) {
-          macResult.textContent = JSON.stringify({ http_status: r.status, ...d }, null, 2);
+          const out = (d && typeof d === 'object')
+            ? Object.assign({ http_status: r.status }, d)
+            : { http_status: r.status, error: String(d || 'Unknown error') };
+          macResult.textContent = JSON.stringify(out, null, 2);
           return;
         }
 
@@ -1032,7 +1035,10 @@ function renderHome(req, res) {
           d = { ok: false, error: 'Non-JSON response from /mac/clips/delete', raw };
         }
 
-        macResult.textContent = JSON.stringify({ http_status: r.status, ...d }, null, 2);
+        const out = (d && typeof d === 'object')
+          ? Object.assign({ http_status: r.status }, d)
+          : { http_status: r.status, error: String(d || 'Unknown error') };
+        macResult.textContent = JSON.stringify(out, null, 2);
 
         if (r.ok && d.ok) {
           await loadMacClips();
