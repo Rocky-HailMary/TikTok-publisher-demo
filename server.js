@@ -725,7 +725,7 @@ function renderHome(req, res) {
     <h3>3) Upload from Mac mini export clips</h3>
     <p class="muted">Shows clips currently available in SyncFiles/export_clips via the Mac bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
     <div class="row">
-      <button id="loadMacClipsBtn" type="button" onclick="if (window.loadMacClips) { window.loadMacClips(); return false; } window.location.href='/mac/clips'; return false;">Load clips from Mac mini</button>
+      <button id="loadMacClipsBtn" type="button" onclick="return window.loadMacClipsFallback ? window.loadMacClipsFallback() : false;">Load clips from Mac mini</button>
       <button id="deleteMacClipsBtn" type="button">Delete Selected</button>
     </div>
 
@@ -762,6 +762,62 @@ function renderHome(req, res) {
       <video id="clipPlayerVideo" class="clip-player-video" controls playsinline preload="metadata"></video>
     </div>
   </div>
+
+  <script>
+    function loadMacClipsFallback() {
+      try {
+        if (window.loadMacClips && window.loadMacClips !== loadMacClipsFallback) {
+          window.loadMacClips();
+          return false;
+        }
+
+        var pre = document.getElementById('macResult');
+        if (pre) pre.textContent = 'Loading clips + support metadata...';
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/mac/clips', true);
+        xhr.withCredentials = true;
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          var text = xhr.responseText || '';
+          if (pre) pre.textContent = text || ('HTTP ' + xhr.status);
+
+          // Minimal in-page rendering fallback (legacy browser safe)
+          try {
+            var payload = JSON.parse(text || '{}');
+            var grid = document.getElementById('mac_clip_grid');
+            if (!grid) return;
+            if (!payload || !payload.ok || !payload.clips || !payload.clips.length) return;
+
+            var html = ['<ul class="muted" style="margin:0; padding-left:18px;">'];
+            for (var i = 0; i < payload.clips.length; i++) {
+              var c = payload.clips[i] || {};
+              var name = String(c.name || 'unnamed');
+              html.push('<li>' + name.replace(/[&<>]/g, function (ch) {
+                return ch === '&' ? '&amp;' : (ch === '<' ? '&lt;' : '&gt;');
+              }) + '</li>');
+            }
+            html.push('</ul>');
+            grid.innerHTML = html.join('');
+          } catch (_err) {
+            // keep raw JSON in <pre>
+          }
+        };
+        xhr.send(null);
+      } catch (err) {
+        var pre = document.getElementById('macResult');
+        if (pre) pre.textContent = String(err && err.message ? err.message : err);
+      }
+      return false;
+    }
+
+    window.loadMacClipsFallback = loadMacClipsFallback;
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        loadMacClipsFallback();
+      }, 0);
+    });
+  </script>
 
   <script>
     const uploadForm = document.getElementById('uploadForm');
@@ -1023,10 +1079,6 @@ function renderHome(req, res) {
 
     window.loadMacClips = loadMacClips;
     loadMacClipsBtn.addEventListener('click', loadMacClips);
-    // Auto-load once so users immediately see either clips or a clear error.
-    setTimeout(() => {
-      loadMacClips().catch(() => {});
-    }, 0);
 
     deleteMacClipsBtn.addEventListener('click', async () => {
       const names = getCheckedMacClips();
