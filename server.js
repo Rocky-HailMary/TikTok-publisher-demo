@@ -136,6 +136,15 @@ function requireApprovedTikTok(req, res, next) {
   return next();
 }
 
+function requireSiteSession(req, res, next) {
+  if (!SITE_LOGIN_USER || !SITE_LOGIN_PASS) return next();
+  if (req.session?.siteAuthed) return next();
+  return res.status(401).json({
+    ok: false,
+    error: 'Not logged in to site. Open / and sign in first.'
+  });
+}
+
 async function cleanupUploadCache() {
   try {
     const files = await fsp.readdir(uploadDir);
@@ -1275,7 +1284,7 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/mac/clips', requireApprovedTikTok, async (_req, res) => {
+app.get('/mac/clips', requireSiteSession, async (_req, res) => {
   try {
     const bridgeResp = await fetchMacBridgeClips();
     if (!bridgeResp.ok) {
@@ -1299,7 +1308,7 @@ app.get('/mac/clips', requireApprovedTikTok, async (_req, res) => {
   }
 });
 
-app.post('/mac/clips/delete', requireApprovedTikTok, async (req, res) => {
+app.post('/mac/clips/delete', requireSiteSession, async (req, res) => {
   const namesRaw = Array.isArray(req.body?.names) ? req.body.names : [];
   const names = [...new Set(
     namesRaw
