@@ -436,6 +436,11 @@ function renderHome(req, res) {
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #aaa; cursor: pointer; }
     input, textarea { width: 100%; padding: 9px; margin: 6px 0 10px; border: 1px solid #bbb; border-radius: 8px; }
     pre { background:#111; color:#f7f7f7; padding: 12px; border-radius: 10px; overflow:auto; max-height: 260px; }
+    #macResult {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     .muted { color: #666; font-size: 13px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; }
     .row > button { width: auto; }
