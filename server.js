@@ -981,7 +981,7 @@ function renderHome(req, res) {
                         if (logId) lines.push('TikTok log_id: ' + logId);
                         lines.push('');
                         lines.push(JSON.stringify(payload, null, 2));
-                        out = lines.join('\n');
+                        out = lines.join('\\n');
                       } else {
                         out = JSON.stringify(payload, null, 2);
                       }
@@ -1341,7 +1341,7 @@ function renderHome(req, res) {
         const d = await r.json();
         const publishId = d && d.response_payload && d.response_payload.data ? d.response_payload.data.publish_id : null;
         if (r.ok && d && d.ok && publishId) {
-          macResult.textContent = '✅ Publish started successfully.\nPublish ID: ' + publishId + '\n\n' + JSON.stringify(d, null, 2);
+          macResult.textContent = '✅ Publish started successfully.\\nPublish ID: ' + publishId + '\\n\\n' + JSON.stringify(d, null, 2);
         } else {
           macResult.textContent = JSON.stringify(d, null, 2);
         }
