@@ -725,7 +725,7 @@ function renderHome(req, res) {
     <h3>3) Upload from Mac mini export clips</h3>
     <p class="muted">Shows clips currently available in SyncFiles/export_clips via the Mac bridge (${MAC_BRIDGE_BASE_URL || 'not configured'}).</p>
     <div class="row">
-      <button id="loadMacClipsBtn" type="button">Load clips from Mac mini</button>
+      <button id="loadMacClipsBtn" type="button" onclick="if (window.loadMacClips) { window.loadMacClips(); return false; } window.location.href='/mac/clips'; return false;">Load clips from Mac mini</button>
       <button id="deleteMacClipsBtn" type="button">Delete Selected</button>
     </div>
 
@@ -815,9 +815,19 @@ function renderHome(req, res) {
       return mb.toFixed(2) + ' MB';
     }
 
+    function clipPostingText(clip) {
+      const posting = clip && clip.posting ? clip.posting : null;
+      return posting && posting.text ? String(posting.text).trim() : '';
+    }
+
+    function clipPostingHashtags(clip) {
+      const posting = clip && clip.posting ? clip.posting : null;
+      return posting && Array.isArray(posting.hashtags) ? posting.hashtags : [];
+    }
+
     function buildSuggestedCaption(clip) {
-      const text = String(clip?.posting?.text || '').trim();
-      const hashtags = Array.isArray(clip?.posting?.hashtags) ? clip.posting.hashtags : [];
+      const text = clipPostingText(clip);
+      const hashtags = clipPostingHashtags(clip);
       const tagText = hashtags.join(' ').trim();
       return [text, tagText].filter(Boolean).join('\\n\\n').trim();
     }
@@ -948,11 +958,11 @@ function renderHome(req, res) {
 
         const postingText = document.createElement('div');
         postingText.className = 'clip-posting';
-        postingText.textContent = String(clip?.posting?.text || '').trim() || 'No posting text found in support file.';
+        postingText.textContent = clipPostingText(clip) || 'No posting text found in support file.';
 
         const hashtags = document.createElement('div');
         hashtags.className = 'clip-hashtags';
-        const tags = Array.isArray(clip?.posting?.hashtags) ? clip.posting.hashtags : [];
+        const tags = clipPostingHashtags(clip);
         hashtags.textContent = tags.length ? tags.join(' ') : 'No hashtags found.';
 
         meta.appendChild(name);
@@ -997,7 +1007,11 @@ function renderHome(req, res) {
 
         const clips = Array.isArray(d.clips) ? d.clips : [];
         renderMacClipGrid(clips);
-        const withPosting = clips.filter((c) => String(c?.posting?.text || '').trim() || (Array.isArray(c?.posting?.hashtags) && c.posting.hashtags.length)).length;
+        const withPosting = clips.filter((c) => {
+          const text = clipPostingText(c);
+          const tags = clipPostingHashtags(c);
+          return Boolean(text || (tags && tags.length));
+        }).length;
         macResult.textContent = JSON.stringify({ ok: true, clip_count: clips.length, with_posting_support: withPosting }, null, 2);
       } catch (err) {
         macResult.textContent = String(err);
@@ -1007,7 +1021,12 @@ function renderHome(req, res) {
       }
     }
 
+    window.loadMacClips = loadMacClips;
     loadMacClipsBtn.addEventListener('click', loadMacClips);
+    // Auto-load once so users immediately see either clips or a clear error.
+    setTimeout(() => {
+      loadMacClips().catch(() => {});
+    }, 0);
 
     deleteMacClipsBtn.addEventListener('click', async () => {
       const names = getCheckedMacClips();
@@ -1071,8 +1090,8 @@ function renderHome(req, res) {
           })
         });
         const d = await r.json();
-        const publishId = d?.response_payload?.data?.publish_id;
-        if (r.ok && d?.ok && publishId) {
+        const publishId = d && d.response_payload && d.response_payload.data ? d.response_payload.data.publish_id : null;
+        if (r.ok && d && d.ok && publishId) {
           macResult.textContent = '✅ Publish started successfully.\nPublish ID: ' + publishId + '\n\n' + JSON.stringify(d, null, 2);
         } else {
           macResult.textContent = JSON.stringify(d, null, 2);
