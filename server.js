@@ -97,7 +97,7 @@ function isAllowedClipName(name) {
 function oauthNoticeRedirect(type, message) {
   const key = type === 'ok' ? 'oauth_ok' : 'oauth_error';
   const text = String(message || '').trim() || (type === 'ok' ? 'OAuth success' : 'OAuth failed');
-  return `/?${key}=${encodeURIComponent(text)}`;
+  return `/app?${key}=${encodeURIComponent(text)}`;
 }
 
 function cleanupOAuthStateStore() {
@@ -182,7 +182,12 @@ function requireBasicAuth(req, res, next) {
   // Keep the main page behind Basic Auth, but let app JSON/action routes
   // authenticate via session/TikTok checks so browser fetches don't stall.
   const authOptionalPath =
+    req.path === '/' ||
     req.path === '/health' ||
+    req.path === '/terms' ||
+    req.path === '/privacy' ||
+    req.path === '/terms-of-service' ||
+    req.path === '/privacy-policy' ||
     req.path === '/api/status' ||
     req.path.startsWith('/mac/') ||
     req.path.startsWith('/publish/') ||
@@ -406,6 +411,44 @@ async function deleteMacBridgeClips(names) {
   return { ok: resp.ok, status: resp.status, payload };
 }
 
+function renderPublicHome(_req, res) {
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>HyperCreative Games - Dance Guru</title>
+  <style>
+    body { font-family: Inter, system-ui, Arial, sans-serif; margin: 28px; max-width: 860px; line-height: 1.45; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+    .muted { color: #666; font-size: 14px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    a.btn { display:inline-block; padding: 10px 14px; border: 1px solid #aaa; border-radius: 8px; color: #111; text-decoration:none; }
+  </style>
+</head>
+<body>
+  <h1>HyperCreative Games - Dance Guru</h1>
+  <p class="muted">Public app homepage for TikTok developer review.</p>
+
+  <div class="card">
+    <h3>What this app does</h3>
+    <p>Dance Guru lets creators connect their own TikTok account and publish video content through TikTok OAuth and Content Posting API.</p>
+    <div class="row">
+      <a class="btn" href="/app">Open Review Demo App</a>
+      <a class="btn" href="https://www.hypercreative.games" target="_blank" rel="noopener noreferrer">Main Website</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Legal</h3>
+    <p><a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a></p>
+  </div>
+</body>
+</html>`;
+
+  res.status(200).send(html);
+}
+
 function renderHome(req, res) {
   const missing = mustHaveConfig();
   const tiktok = getActiveTikTokAuth(req);
@@ -427,7 +470,7 @@ function renderHome(req, res) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dance Guru TikTok Demo</title>
+  <title>HyperCreative Games - Dance Guru TikTok Demo</title>
   <style>
     body { font-family: Inter, system-ui, Arial, sans-serif; margin: 24px; max-width: 980px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
@@ -686,8 +729,9 @@ function renderHome(req, res) {
   </style>
 </head>
 <body>
-  <h1>Dance Guru TikTok Review Demo</h1>
+  <h1>HyperCreative Games - Dance Guru TikTok Review Demo</h1>
   <p class="muted">Domain: ${APP_BASE_URL}</p>
+  <p class="muted">Legal: <a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a></p>
 
   ${notice ? `<div class="card ${notice.type === 'error' ? 'bad' : 'ok'}">${notice.message}</div>` : ''}
 
@@ -1361,7 +1405,21 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'tiktok-review-demo', time: new Date().toISOString() });
 });
 
-app.get('/', renderHome);
+app.get('/', renderPublicHome);
+
+app.get('/terms', (_req, res) => {
+  res.status(200).send(`<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Terms of Service - HyperCreative Games</title><style>body{font-family:Inter,system-ui,Arial,sans-serif;margin:24px;max-width:860px;line-height:1.5}.muted{color:#666}</style></head><body><h1>Terms of Service</h1><p class="muted">Last updated: ${new Date().toISOString().slice(0, 10)}</p><p>These terms govern access to Dance Guru demo services provided by HyperCreative Games. By using this service, you agree to use it lawfully and in accordance with TikTok platform policies.</p><p>Contact: support@hypercreative.games</p><p><a href="/privacy">Privacy Policy</a></p></body></html>`);
+});
+
+app.get('/terms-of-service', (_req, res) => res.redirect(302, '/terms'));
+
+app.get('/privacy', (_req, res) => {
+  res.status(200).send(`<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Privacy Policy - HyperCreative Games</title><style>body{font-family:Inter,system-ui,Arial,sans-serif;margin:24px;max-width:860px;line-height:1.5}.muted{color:#666}</style></head><body><h1>Privacy Policy</h1><p class="muted">Last updated: ${new Date().toISOString().slice(0, 10)}</p><p>We use OAuth tokens and minimal session data to provide TikTok connection and publishing features for users who authorize the app.</p><p>We do not sell personal data. Data handling is limited to operating app functionality and complying with platform policy.</p><p>Contact: support@hypercreative.games</p><p><a href="/terms">Terms of Service</a></p></body></html>`);
+});
+
+app.get('/privacy-policy', (_req, res) => res.redirect(302, '/privacy'));
+
+app.get('/app', renderHome);
 
 app.get('/auth/tiktok/start', (req, res) => {
   const missing = mustHaveConfig();
@@ -1536,7 +1594,7 @@ app.get('/auth/tiktok/logout', (req, res) => {
   req.session.tiktok = null;
   req.session.oauthState = null;
   req.session.flash = { type: 'ok', message: 'Disconnected TikTok session.' };
-  res.redirect('/');
+  res.redirect('/app');
 });
 
 app.get('/api/status', (req, res) => {
